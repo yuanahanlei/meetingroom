@@ -204,6 +204,10 @@ export default async function NewReservationPage({
       "17:30"
     );
 
+    if (!room) {
+      redirect("/reservations");
+    }
+    
     redirect(
       `/reservations/new?roomId=${encodeURIComponent(
         room.id
