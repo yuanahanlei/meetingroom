@@ -1,0 +1,96 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum ReservationStatus {
+  CONFIRMED
+  CANCELLED
+  BLOCKED
+}
+
+enum ScanAction {
+  SCAN
+  IN
+  OUT
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  dept      String?
+  role      Role     @default(USER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reservations Reservation[] @relation("OrganizerReservations")
+  cancelledReservations Reservation[] @relation("CancelledByReservations")
+  accessLogs   AccessLog[]
+}
+
+model Room {
+  id        String   @id @default(cuid())
+  name      String
+  floor     String
+  capacity  Int
+  isActive  Boolean  @default(true)
+  features  String[] @default([])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reservations Reservation[]
+  accessLogs   AccessLog[]
+}
+
+model Reservation {
+  id          String            @id @default(cuid())
+  roomId      String
+  organizerId String
+  title       String?
+  department  String
+  headcount   Int
+  startAt     DateTime
+  endAt       DateTime
+  status      ReservationStatus @default(CONFIRMED)
+
+  cancelledAt      DateTime?
+  cancelledByUserId String?
+  cancelReason     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  room      Room @relation(fields: [roomId], references: [id])
+  organizer User @relation("OrganizerReservations", fields: [organizerId], references: [id])
+  cancelledBy User? @relation("CancelledByReservations", fields: [cancelledByUserId], references: [id])
+  accessLogs AccessLog[]
+
+  @@index([roomId, startAt, endAt])
+  @@index([organizerId, startAt])
+}
+
+model AccessLog {
+  id            String     @id @default(cuid())
+  roomId        String
+  userId        String
+  reservationId String?
+  action        ScanAction @default(SCAN)
+  scannedAt     DateTime   @default(now())
+
+  room        Room        @relation(fields: [roomId], references: [id])
+  user        User        @relation(fields: [userId], references: [id])
+  reservation Reservation? @relation(fields: [reservationId], references: [id])
+
+  @@index([roomId, scannedAt])
+  @@index([userId, scannedAt])
+}
