@@ -146,7 +146,7 @@ export async function createReservation(formData: FormData) {
 
           startAt,
           endAt,
-          department: user.dept, // 你的 schema 看起來有 department（若沒有再改）
+          department: user.dept ??"", // 你的 schema 看起來有 department（若沒有再改）
           title: title === "" ? null : title,
           headcount,
 
