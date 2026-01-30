@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { ReservationStatus } from "@prisma/client";
 import CancelReservationButton from "@/components/CancelReservationButton";
+export const dynamic = "force-dynamic";
 
 const TZ = "Asia/Taipei";
 
