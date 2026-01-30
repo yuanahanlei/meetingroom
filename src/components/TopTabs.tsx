@@ -1,89 +1,84 @@
-import { prisma } from "@/lib/prisma";
+"use client";
+
+import { useMemo } from "react";
 import OverviewGrid from "@/components/OverviewGrid";
 
-type SearchParams = { date?: string };
+type SourceRoom = {
+  id: string;
+  name?: string | null;
+  title?: string | null;
+  capacity?: number | null;
+};
 
-function ymdTodayLocal() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+type Booking = {
+  roomId: string;
+  startAt: string;
+  endAt: string;
+  organizerName: string | null;
+  organizerDept: string | null;
+};
+
+type Props = {
+  date: string; // YYYY-MM-DD
+  rooms: SourceRoom[];
+  bookings: Booking[];
+};
+
+function buildSlots() {
+  // 08:30–17:30，每 30 分鐘
+  const starts: string[] = [];
+  const ends: string[] = [];
+
+  let h = 8;
+  let m = 30;
+
+  while (h < 17 || (h === 17 && m === 0)) {
+    const start = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+    starts.push(start);
+
+    m += 30;
+    if (m >= 60) {
+      h += 1;
+      m -= 60;
+    }
+
+    const end = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+    ends.push(end);
+  }
+
+  return {
+    slotStarts: starts,
+    slotEnds: ends,
+    rangeEndLabel: "17:30",
+  };
 }
 
-export default async function OverviewPage({
-  searchParams,
-}: {
-  searchParams: Promise<SearchParams>;
-}) {
-  const sp = await searchParams;
-  const date = sp.date || ymdTodayLocal();
+export default function TopTabs({ date, rooms, bookings }: Props) {
+  const { slotStarts, slotEnds, rangeEndLabel } = useMemo(buildSlots, []);
 
-  const rooms = await prisma.room.findMany({
-    select: { id: true, name: true, floor: true },
-    orderBy: [{ floor: "asc" }, { name: "asc" }],
-  });
-
-  // 當日範圍
-  const [y, mo, d] = date.split("-").map(Number);
-  const dayStart = new Date(y, mo - 1, d, 0, 0, 0, 0);
-  const dayEnd = new Date(y, mo - 1, d, 23, 59, 59, 999);
-
-  const reservations = await prisma.reservation.findMany({
-    where: {
-      cancelledAt: null,
-      startAt: { lt: dayEnd },
-      endAt: { gt: dayStart },
-    },
-    select: {
-      id: true,
-      roomId: true,
-      startAt: true,
-      endAt: true,
-      organizer: { select: { name: true, dept: true } },
-    },
-  });
-
-  const bookings = reservations.map((r) => ({
-    id: r.id,
-    roomId: r.roomId,
-    startAt: r.startAt.toISOString(),
-    endAt: r.endAt.toISOString(),
-    organizerName: r.organizer?.name ?? null,
-    organizerDept: r.organizer?.dept ?? null,
-  }));
+  /**
+   * 🔑 關鍵修正：
+   * 將 DB / API 來的 room 資料
+   * 轉成 OverviewGrid 專用的 shape
+   */
+  const roomsForGrid = useMemo(
+    () =>
+      rooms.map((r) => ({
+        id: r.id,
+        title: r.title ?? r.name ?? "未命名會議室",
+        capacity: typeof r.capacity === "number" ? r.capacity : null,
+      })),
+    [rooms]
+  );
 
   return (
-    <div>
-      <div className="mb-4 flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">總覽</h1>
-          <p className="mt-1 text-sm text-zinc-500">
-            拖曳選取空白時段 → 下方按「預約」開啟預約（08:30–17:30 / 每 30 分）
-          </p>
-        </div>
-
-        <form className="flex items-end gap-2">
-          <div>
-            <div className="text-xs font-medium text-zinc-600">日期</div>
-            <input
-              className="mt-1 h-11 w-[220px] rounded-xl border border-zinc-200 bg-white px-4 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-              type="date"
-              name="date"
-              defaultValue={date}
-            />
-          </div>
-
-          <button
-            className="h-11 rounded-xl bg-black px-4 text-sm font-semibold text-white hover:opacity-90"
-            type="submit"
-          >
-            切換
-          </button>
-        </form>
-      </div>
-
-      <OverviewGrid dateYmd={date} rooms={rooms} bookings={bookings} />
-    </div>
+    <OverviewGrid
+      dateYmd={date}
+      slotStarts={slotStarts}
+      slotEnds={slotEnds}
+      rangeEndLabel={rangeEndLabel}
+      rooms={roomsForGrid}
+      bookings={bookings}
+    />
   );
 }
