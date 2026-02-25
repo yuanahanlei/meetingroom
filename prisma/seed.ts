@@ -1,10 +1,10 @@
 /* prisma/seed.ts */
-const { PrismaClient } = require("@prisma/client");
 
-const prisma = new PrismaClient();
+import { PrismaClient } from "@prisma/client";
+
+const prismaClient = new PrismaClient();
 
 async function main() {
-  // ✅ 五個部門，每部門 4~6 人（你可自行改）
   const employees = [
     // SCOT 北區
     { email: "scot.n1@example.com", name: "北區-王小明", dept: "SCOT 北區", role: "USER" },
@@ -44,12 +44,12 @@ async function main() {
   let upserted = 0;
 
   for (const e of employees) {
-    // ✅ 不破壞你既有資料：用 email 當唯一鍵，存在就更新，不存在才新增
-    await prisma.user.upsert({
+    await prismaClient.user.upsert({
       where: { email: e.email },
       update: { name: e.name, dept: e.dept, role: e.role },
       create: { email: e.email, name: e.name, dept: e.dept, role: e.role },
     });
+
     upserted++;
   }
 
@@ -57,10 +57,10 @@ async function main() {
 }
 
 main()
-  .catch((e: any) => {
+  .catch((e) => {
     console.error("❌ Seed failed:", e);
     process.exit(1);
   })
   .finally(async () => {
-    await prisma.$disconnect();
+    await prismaClient.$disconnect();
   });
