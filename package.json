@@ -1,36 +1,30 @@
 {
-  "name": "meeting-room-booking",
-  "private": true,
+  "name": "meeting-room-booking-nextjs",
   "version": "0.1.0",
-  "type": "module",
+  "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
-    "lint": "next lint",
-    "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio",
-    "db:seed": "node prisma/seed.mjs"
+    "start": "next start"
   },
   "dependencies": {
-    "@prisma/client": "^5.19.1",
-    "date-fns": "^3.6.0",
-    "next": "^14.2.5",
-    "react": "18.2.0",
-    "react-dom": "18.2.0",
-    "zod": "^3.23.8"
+    "@prisma/client": "^5.x.x",
+    "date-fns": "^4.1.0",
+    "next": "14.2.35",
+    "react": "^18",
+    "react-dom": "^18"
   },
   "devDependencies": {
-    "@types/node": "^22.5.2",
-    "@types/react": "^19.0.1",
-    "@types/react-dom": "^19.0.1",
-    "autoprefixer": "^10.4.23",
-    "eslint": "^8.57.0",
-    "eslint-config-next": "^14.2.5",
+    "@tailwindcss/postcss": "^4.1.18",
+    "@types/react": "19.2.10",
+    "autoprefixer": "^10.4.24",
     "postcss": "^8.5.6",
-    "prisma": "^5.19.1",
-    "tailwindcss": "^3.4.17",
+    "prisma": "^5.x.x",
+    "tailwindcss": "^4.1.18",
+    "ts-node": "^10.9.2",
     "typescript": "^5.5.4"
+  },
+  "prisma": {
+    "seed": "ts-node prisma/seed.ts"
   }
 }

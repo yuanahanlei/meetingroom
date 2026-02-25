@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { ReservationStatus } from "@prisma/client";
 
 type SearchParams = {
   date?: string; // YYYY-MM-DD
@@ -78,7 +79,6 @@ function badgeMeta(a: Availability) {
         cls: "bg-amber-50 text-amber-800 ring-amber-200",
       };
     case "UNAVAILABLE":
-      // ✅ 調整：讓「已被預約」更顯眼，避免跟 disabled 灰按鈕混在一起
       return {
         text: "已被預約",
         cls: "bg-rose-50 text-rose-700 ring-rose-200",
@@ -96,32 +96,27 @@ function withParams(base: string, params: Record<string, string | undefined>) {
 
 /**
  * 樓層排序：
- * - 地下：B99 ~ B1（數字越大越下面，但顯示順序應該 B? 由小到大？通常是 B1、B2...；你想 B2 在 B1 前也可調）
- * - 地上：1F ~ 99F
- * - 其他：放最後（避免亂序）
+ * - 地下：B1、B2...
+ * - 地上：1F、2F...
+ * - 其他：放最後
  */
 function floorSortKey(floor: string | null | undefined) {
   if (!floor) return Number.POSITIVE_INFINITY;
 
   const s = String(floor).trim().toUpperCase();
 
-  // 常見格式：B1、B2、B1F
   let m = s.match(/^B(\d+)(F)?$/);
   if (m) {
     const n = Number(m[1]);
-    // 讓 B1 在最前、B2 在 B1 後：B1 < B2 < B3
-    // key 用負數區間確保地下都排在地上前面
-    return -1000 + n; // B1=-999, B2=-998 ...
+    return -1000 + n; // B1=-999, B2=-998...
   }
 
-  // 常見格式：1F、2F、10F
   m = s.match(/^(\d+)(F)?$/);
   if (m) {
     const n = Number(m[1]);
-    return n; // 1,2,3...
+    return n;
   }
 
-  // 其他格式：例如 "GF" "M" "R" 或空白：放最後
   return Number.POSITIVE_INFINITY;
 }
 
@@ -149,32 +144,29 @@ export default async function SearchPage({
   if (endAt <= startAt) endAt = new Date(startAt.getTime() + 30 * 60 * 1000);
 
   const roomsRaw = await prisma.room.findMany({
-    // 這裡先不靠資料庫排序，改成後端 sort（可自訂 B1/1F/2F…順序）
     select: {
       id: true,
       name: true,
-      floor: true, // 若沒有這欄位就刪掉
-      capacity: true, // 若沒有這欄位就刪掉
+      floor: true,
+      capacity: true,
     },
   });
 
-  // ✅ 顯示順序：先樓層，再名稱
   const rooms = roomsRaw
     .slice()
     .sort(
       (a, b) =>
-        floorSortKey(a.floor) -
-          floorSortKey(b.floor) ||
+        floorSortKey(a.floor) - floorSortKey(b.floor) ||
         a.name.localeCompare(b.name, "zh-Hant")
     );
 
   const dayStart = buildDateTime(date, "00:00");
   const dayEnd = buildDateTime(date, "23:59");
 
-  // ✅ organizer 的部門欄位是 dept，不是 department
+  // ✅ 改成用 status 判斷有效預約（取 CONFIRMED / BLOCKED）
   const reservations = await prisma.reservation.findMany({
     where: {
-      cancelledAt: null,
+      status: { in: [ReservationStatus.CONFIRMED, ReservationStatus.BLOCKED] },
       startAt: { lt: dayEnd },
       endAt: { gt: dayStart },
     },
@@ -182,6 +174,7 @@ export default async function SearchPage({
       roomId: true,
       startAt: true,
       endAt: true,
+      // ✅ 你的 schema 裡 organizer 是 Employee? 並有 name/dept
       organizer: {
         select: {
           name: true,
@@ -209,7 +202,8 @@ export default async function SearchPage({
   const roomCardsAll = rooms.map((room) => {
     const rs = byRoom.get(room.id) ?? [];
 
-    const overlapRes = rs.find((r) => overlaps(startAt, endAt, r.start, r.end)) ?? null;
+    const overlapRes =
+      rs.find((r) => overlaps(startAt, endAt, r.start, r.end)) ?? null;
     const hasOverlap = !!overlapRes;
     const hasAnyThatDay = rs.length > 0;
 
@@ -241,15 +235,13 @@ export default async function SearchPage({
     <div className="mx-auto max-w-6xl px-6 py-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          {/* ✅ 調整：頁面標題稍微放大一階 */}
-          <h5 className="text-2xl font-semibold tracking-tight">搜尋會議室</h5>
+          <h1 className="text-2xl font-semibold tracking-tight">搜尋會議室</h1>
           <p className="mt-1 text-sm text-zinc-500">
             可借時段：08:30–17:30（每 30 分鐘為單位）
           </p>
         </div>
       </div>
 
-      {/* Toolbar */}
       <div className="mt-6 rounded-2xl border border-zinc-200 bg-white p-4">
         <form>
           <div className="flex flex-col gap-4 md:flex-row md:items-end md:gap-4">
@@ -342,7 +334,6 @@ export default async function SearchPage({
         </form>
       </div>
 
-      {/* Cards */}
       <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
         {roomCards.map(
           ({ room, availability, hasOverlap, bookedByName, bookedByDept }) => {
@@ -375,9 +366,7 @@ export default async function SearchPage({
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="truncate text-lg font-semibold">
-                        {title}
-                      </h3>
+                      <h3 className="truncate text-lg font-semibold">{title}</h3>
                       <span
                         className={[
                           "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1",
@@ -427,7 +416,6 @@ export default async function SearchPage({
                   {availability === "PARTIAL" ? (
                     <span className="text-xs text-zinc-500">此日已有部分預約</span>
                   ) : availability === "UNAVAILABLE" ? (
-                    // ✅ 調整：預約人資訊更醒目（顏色 + 字重），方便內部協調
                     <span className="text-xs font-medium text-rose-700">
                       {bookedText}
                     </span>

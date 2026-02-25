@@ -44,7 +44,6 @@ function buildSlots() {
 const SLOTS = buildSlots();
 
 function formatYMDInTZ(d: Date, timeZone: string) {
-  // en-CA => YYYY-MM-DD
   return new Intl.DateTimeFormat("en-CA", {
     timeZone,
     year: "numeric",
@@ -54,7 +53,6 @@ function formatYMDInTZ(d: Date, timeZone: string) {
 }
 
 function addMonthsSafe(date: Date, months: number) {
-  // 同日，不存在就取月底
   const d = new Date(date);
   const day = d.getDate();
   d.setDate(1);
@@ -69,7 +67,6 @@ function isValidYmd(ymd: string) {
 }
 
 function clampDate(ymd: string, min: string, max: string) {
-  // YYYY-MM-DD 可直接比較
   if (ymd < min) return min;
   if (ymd > max) return max;
   return ymd;
@@ -109,7 +106,15 @@ export default async function RoomPage({
     where: { id },
     select: { id: true, name: true, floor: true, capacity: true },
   });
-  if (!room) return <div className="container">找不到會議室</div>;
+  if (!room) {
+    return (
+      <div className="mx-auto max-w-6xl px-6 py-8">
+        <div className="rounded-2xl border border-zinc-200 bg-white p-5">
+          找不到會議室
+        </div>
+      </div>
+    );
+  }
 
   // ✅ 只顯示 08:30–17:30（不可跨日）
   const dayStart = combineDateTime(date, "08:30");
@@ -132,7 +137,6 @@ export default async function RoomPage({
     },
   });
 
-  // 幫每一格判斷是否被佔用（重疊即 busy）
   const findBusy = (slotStart: Date, slotEnd: Date) => {
     return reservations.find((r) => r.startAt < slotEnd && r.endAt > slotStart);
   };
@@ -142,9 +146,17 @@ export default async function RoomPage({
     const slotEnd = combineDateTime(date, s.end);
     const busy = findBusy(slotStart, slotEnd);
 
-    const organizerText = busy?.organizer
-      ? `${busy.organizer.name}${busy.organizer.dept ? `（${busy.organizer.dept}）` : ""}`
-      : "";
+    const organizerName = busy?.organizer?.name ?? "";
+    const organizerDept = busy?.organizer?.dept ?? "";
+
+    const organizerText =
+      organizerName && organizerDept
+        ? `${organizerName}（${organizerDept}）`
+        : organizerName
+        ? organizerName
+        : organizerDept
+        ? `（${organizerDept}）`
+        : "";
 
     return {
       start: s.start,
@@ -155,45 +167,49 @@ export default async function RoomPage({
   });
 
   const availableCount = slotRows.filter((x) => !x.isBusy).length;
-  const shownRows = view === "available" ? slotRows.filter((x) => !x.isBusy) : slotRows;
+  const shownRows =
+    view === "available" ? slotRows.filter((x) => !x.isBusy) : slotRows;
+
+  const pageTitle = `${room.floor ? `${room.floor} · ` : ""}${room.name}`;
 
   return (
-    <div className="container">
-      {/* 頁首：標題 + 行動 */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="mx-auto max-w-6xl px-6 py-8">
+      {/* 頁首 */}
+      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {room.floor ? `${room.floor} · ` : ""}
-            {room.name}
-          </h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{pageTitle}</h1>
           <div className="mt-1 text-sm text-zinc-500">
             可借時段：08:30–17:30（每 30 分）
           </div>
         </div>
 
-        <div className="flex gap-2">
-          <Link className="btn" href={`/search?date=${encodeURIComponent(date)}`}>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-900 hover:bg-zinc-50"
+            href={`/search?date=${encodeURIComponent(date)}`}
+          >
             返回搜尋
           </Link>
-          <Link className="btn" href={`/scan/room/${room.id}`}>
+          <Link
+            className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-900 hover:bg-zinc-50"
+            href={`/scan/room/${room.id}`}
+          >
             掃碼頁
           </Link>
         </div>
       </div>
 
-      <div className="h-4" />
-
-      <div className="card">
-        {/* ✅ 已更新提示（更醒目但不吵） */}
+      <div className="mt-6 rounded-2xl border border-zinc-200 bg-white p-5">
+        {/* ✅ 已更新提示 */}
         {showUpdatedBanner ? (
-          <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-2 font-semibold">
-                ✅ 已更新
-                <span className="font-semibold">{date}</span>
-                <span className="text-blue-800">（{view === "available" ? "可借" : "全部"}）</span>
+          <div className="mb-5 rounded-2xl border border-blue-200 bg-blue-50 p-4">
+            <div className="flex flex-wrap items-center gap-2 text-sm text-blue-900">
+              <span className="font-semibold">✅ 已更新</span>
+              <span className="font-semibold">{date}</span>
+              <span className="text-blue-800">
+                （{view === "available" ? "可借" : "全部"}）
               </span>
-              <span className="ml-1 inline-flex items-center rounded-full border border-blue-200 bg-white px-2 py-0.5 text-xs font-semibold text-blue-900">
+              <span className="inline-flex items-center rounded-full border border-blue-200 bg-white px-2 py-0.5 text-xs font-semibold text-blue-900">
                 可借：{availableCount} 段
               </span>
               <span className="ml-auto text-xs text-blue-700">已重新計算</span>
@@ -201,17 +217,17 @@ export default async function RoomPage({
           </div>
         ) : null}
 
-        {/* 條件列：日期 + 確認（左）/ 顯示切換（右） */}
-        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-          {/* 左：日期 + 確認（✅ items-end 讓按鈕跟 input 底部對齊） */}
-          <form method="get" className="flex items-end gap-3">
+        {/* 條件列 */}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_auto] lg:items-end">
+          {/* 左：日期 + 確認 */}
+          <form method="get" className="flex flex-wrap items-end gap-3">
             <input type="hidden" name="view" value={view} />
             <input type="hidden" name="updated" value="1" />
 
             <div className="w-[320px] max-w-full">
-              <div className="label">日期</div>
+              <div className="text-xs font-medium text-zinc-600">日期</div>
               <input
-                className="input h-11"
+                className="mt-1 h-11 w-full rounded-xl border border-zinc-200 bg-white px-4 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
                 type="date"
                 name="date"
                 defaultValue={date}
@@ -220,64 +236,75 @@ export default async function RoomPage({
               />
             </div>
 
-            <button className="btn primary h-11 px-5" type="submit">
+            <button
+              className="inline-flex h-11 items-center justify-center rounded-xl bg-black px-5 text-sm font-semibold text-white hover:opacity-90"
+              type="submit"
+            >
               確認
             </button>
           </form>
 
-          {/* 右：顯示切換（降低權重，像 toggle） */}
-          <div className="flex items-end justify-between gap-3 md:justify-end">
-            <div className="text-xs text-zinc-500 md:hidden">
-              顯示：{view === "available" ? "可借" : "全部"}
+          {/* 右：顯示切換 */}
+          <div className="justify-self-start lg:justify-self-end">
+            <div className="text-xs font-medium text-zinc-600 lg:text-right">
+              顯示
             </div>
-
-            <div>
-              <div className="label text-right">顯示</div>
-              <div className="inline-flex rounded-2xl border border-zinc-200 bg-white p-1">
-                <Link
-                  className={[
-                    "inline-flex h-10 items-center justify-center rounded-xl px-4 text-sm font-semibold",
-                    view === "available" ? "bg-black text-white" : "text-zinc-700 hover:bg-zinc-50",
-                  ].join(" ")}
-                  href={`/rooms/${room.id}?date=${encodeURIComponent(date)}&view=available&updated=1`}
-                >
-                  可借
-                </Link>
-                <Link
-                  className={[
-                    "inline-flex h-10 items-center justify-center rounded-xl px-4 text-sm font-semibold",
-                    view === "all" ? "bg-black text-white" : "text-zinc-700 hover:bg-zinc-50",
-                  ].join(" ")}
-                  href={`/rooms/${room.id}?date=${encodeURIComponent(date)}&view=all&updated=1`}
-                >
-                  全部
-                </Link>
-              </div>
+            <div className="mt-1 inline-flex rounded-2xl border border-zinc-200 bg-white p-1">
+              <Link
+                className={[
+                  "inline-flex h-10 items-center justify-center rounded-xl px-4 text-sm font-semibold",
+                  view === "available"
+                    ? "bg-black text-white"
+                    : "text-zinc-700 hover:bg-zinc-50",
+                ].join(" ")}
+                href={`/rooms/${room.id}?date=${encodeURIComponent(
+                  date
+                )}&view=available&updated=1`}
+              >
+                可借
+              </Link>
+              <Link
+                className={[
+                  "inline-flex h-10 items-center justify-center rounded-xl px-4 text-sm font-semibold",
+                  view === "all"
+                    ? "bg-black text-white"
+                    : "text-zinc-700 hover:bg-zinc-50",
+                ].join(" ")}
+                href={`/rooms/${room.id}?date=${encodeURIComponent(
+                  date
+                )}&view=all&updated=1`}
+              >
+                全部
+              </Link>
             </div>
           </div>
         </div>
 
-        <hr />
+        <div className="my-5 h-px bg-zinc-100" />
 
-        {/* 時間軸 */}
-        <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+        {/* 時間軸標題列 */}
+        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>
-            <div className="h2">當日時間軸</div>
-            <p className="muted small" style={{ marginTop: 6 }}>
+            <div className="text-lg font-semibold text-zinc-900">當日時間軸</div>
+            <p className="mt-1 text-sm text-zinc-500">
               忙碌時段僅顯示預約人與部門，方便協調。
             </p>
           </div>
 
-          {/* ✅ 只保留一個「可借段數」入口 */}
-          <div className="inline-flex items-center gap-2">
-            <span className="badge">可借：{availableCount} 段</span>
-            <span className="badge">顯示：{view === "available" ? "可借" : "全部"}</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-semibold text-zinc-700">
+              可借：{availableCount} 段
+            </span>
+            <span className="inline-flex items-center rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-semibold text-zinc-700">
+              顯示：{view === "available" ? "可借" : "全部"}
+            </span>
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3">
+        {/* ✅ 時段清單：用 Grid 固定右欄，避免中間「一大片空白」 */}
+        <div className="mt-4 space-y-3">
           {shownRows.length === 0 ? (
-            <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-700">
+            <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-700">
               目前沒有可借時段（可切換「全部」查看忙碌狀態）。
             </div>
           ) : (
@@ -287,35 +314,41 @@ export default async function RoomPage({
               return (
                 <div
                   key={`${s.start}-${s.end}`}
-                  className="card"
-                  style={{
-                    padding: 14,
-                    opacity: isBusy ? 0.6 : 1,
-                  }}
+                  className={[
+                    "rounded-2xl border border-zinc-200 bg-white p-4",
+                    isBusy ? "opacity-60" : "",
+                  ].join(" ")}
                 >
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex flex-col gap-1">
-                      <div className="text-xl font-semibold">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto] sm:items-center">
+                    {/* 左：內容 */}
+                    <div className="min-w-0">
+                      <div className="text-lg font-semibold text-zinc-900">
                         {s.start} – {s.end}
                       </div>
                       {isBusy ? (
-                        <div className="muted small">已被預約 · {s.organizerText}</div>
+                        <div className="mt-1 text-sm text-zinc-600">
+                          已被預約
+                          {s.organizerText ? ` · ${s.organizerText}` : ""}
+                        </div>
                       ) : (
-                        <div className="muted small">可預約</div>
+                        <div className="mt-1 text-sm text-zinc-600">可預約</div>
                       )}
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    {/* 右：按鈕（固定欄） */}
+                    <div className="justify-self-start sm:justify-self-end">
                       {isBusy ? (
-                        <span className="btn" aria-disabled="true">
+                        <span className="inline-flex h-10 items-center justify-center rounded-xl border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-500">
                           已被預約
                         </span>
                       ) : (
                         <Link
-                          className="btn primary"
+                          className="inline-flex h-10 items-center justify-center rounded-xl bg-black px-4 text-sm font-semibold text-white hover:opacity-90"
                           href={`/reservations/new?roomId=${encodeURIComponent(
                             room.id
-                          )}&date=${encodeURIComponent(date)}&start=${encodeURIComponent(
+                          )}&date=${encodeURIComponent(
+                            date
+                          )}&start=${encodeURIComponent(
                             s.start
                           )}&end=${encodeURIComponent(s.end)}`}
                         >
@@ -330,38 +363,48 @@ export default async function RoomPage({
           )}
         </div>
 
-        <hr />
+        <div className="my-6 h-px bg-zinc-100" />
 
         {/* 忙碌清單 */}
-        <div className="h2">忙碌清單（摘要）</div>
+        <div className="text-lg font-semibold text-zinc-900">忙碌清單（摘要）</div>
         {reservations.length === 0 ? (
-          <p className="muted">此時段目前沒有任何已確認預約或維護時段。</p>
+          <p className="mt-2 text-sm text-zinc-500">
+            此時段目前沒有任何已確認預約或維護時段。
+          </p>
         ) : (
-          <table className="mt-2">
-            <thead>
-              <tr>
-                <th>開始</th>
-                <th>結束</th>
-                <th>狀態</th>
-                <th>預約人</th>
-              </tr>
-            </thead>
-            <tbody>
-              {reservations.map((r) => (
-                <tr key={r.id}>
-                  <td>{formatHMInTZ(new Date(r.startAt), TZ)}</td>
-                  <td>{formatHMInTZ(new Date(r.endAt), TZ)}</td>
-                  <td>{r.status}</td>
-                  <td>
-                    {r.organizer.name}
-                    {r.organizer.dept ? (
-                      <span className="muted small">（{r.organizer.dept}）</span>
-                    ) : null}
-                  </td>
+          <div className="mt-3 overflow-hidden rounded-2xl border border-zinc-200">
+            <table className="min-w-full border-collapse">
+              <thead className="bg-zinc-50">
+                <tr className="text-left text-sm text-zinc-600">
+                  <th className="px-4 py-3 font-semibold">開始</th>
+                  <th className="px-4 py-3 font-semibold">結束</th>
+                  <th className="px-4 py-3 font-semibold">狀態</th>
+                  <th className="px-4 py-3 font-semibold">預約人</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-zinc-100 bg-white">
+                {reservations.map((r) => {
+                  const who = r.organizer?.name ?? "（未知）";
+                  const dept = r.organizer?.dept ?? "";
+                  return (
+                    <tr key={r.id} className="text-sm text-zinc-700">
+                      <td className="px-4 py-3">{formatHMInTZ(r.startAt, TZ)}</td>
+                      <td className="px-4 py-3">{formatHMInTZ(r.endAt, TZ)}</td>
+                      <td className="px-4 py-3">{r.status}</td>
+                      <td className="px-4 py-3">
+                        {who}
+                        {dept ? (
+                          <span className="ml-1 text-xs text-zinc-500">
+                            （{dept}）
+                          </span>
+                        ) : null}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>

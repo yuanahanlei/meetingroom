@@ -33,9 +33,16 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // ✅ 預約發起人（Organizer）
   reservations Reservation[] @relation("OrganizerReservations")
+
+  // ✅ 取消者（如果你目前有用 cancelledReservations，這裡就保留）
   cancelledReservations Reservation[] @relation("CancelledByReservations")
-  accessLogs   AccessLog[]
+
+  // ✅ 與會者（join table）
+  attendingReservations ReservationAttendee[]
+
+  accessLogs AccessLog[]
 }
 
 model Room {
@@ -53,30 +60,49 @@ model Room {
 }
 
 model Reservation {
-  id          String            @id @default(cuid())
-  roomId      String
-  organizerId String
-  title       String?
-  department  String
-  headcount   Int
-  startAt     DateTime
-  endAt       DateTime
-  status      ReservationStatus @default(CONFIRMED)
+  id        String            @id @default(cuid())
+  roomId    String
+  startAt   DateTime
+  endAt     DateTime
+  title     String?
+  headcount Int?
+  status    ReservationStatus @default(CONFIRMED)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
 
-  cancelledAt      DateTime?
-  cancelledByUserId String?
-  cancelReason     String?
+  room Room @relation(fields: [roomId], references: [id])
+
+  // ✅ 預約發起人（用你既有的 User）
+  organizerId String?
+  organizer   User?   @relation("OrganizerReservations", fields: [organizerId], references: [id])
+
+  // ✅ 取消者（保留可選）
+  cancelledById String?
+  cancelledBy   User?   @relation("CancelledByReservations", fields: [cancelledById], references: [id])
+
+  // ✅ 與會者 join table
+  attendees ReservationAttendee[]
+  AccessLog AccessLog[]
+
+  @@index([roomId, startAt])
+  @@index([organizerId])
+  @@index([cancelledById])
+}
+
+model ReservationAttendee {
+  id String @id @default(cuid())
+
+  reservationId String
+  userId        String
+
+  reservation Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 
-  room      Room @relation(fields: [roomId], references: [id])
-  organizer User @relation("OrganizerReservations", fields: [organizerId], references: [id])
-  cancelledBy User? @relation("CancelledByReservations", fields: [cancelledByUserId], references: [id])
-  accessLogs AccessLog[]
-
-  @@index([roomId, startAt, endAt])
-  @@index([organizerId, startAt])
+  @@unique([reservationId, userId])
+  @@index([reservationId])
+  @@index([userId])
 }
 
 model AccessLog {
@@ -87,8 +113,8 @@ model AccessLog {
   action        ScanAction @default(SCAN)
   scannedAt     DateTime   @default(now())
 
-  room        Room        @relation(fields: [roomId], references: [id])
-  user        User        @relation(fields: [userId], references: [id])
+  room        Room         @relation(fields: [roomId], references: [id])
+  user        User         @relation(fields: [userId], references: [id])
   reservation Reservation? @relation(fields: [reservationId], references: [id])
 
   @@index([roomId, scannedAt])

@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { createReservation } from "@/app/actions/reservations";
 import { ReservationStatus } from "@prisma/client";
+import AttendeePicker, { AttendeeOption } from "@/components/AttendeePicker";
 
 type SearchParams = {
   roomId?: string;
@@ -137,20 +138,13 @@ export default async function NewReservationPage({
 
   const room = await prisma.room.findUnique({
     where: { id: roomId },
-    select: {
-      id: true,
-      name: true,
-      floor: true,
-      capacity: true,
-    },
+    select: { id: true, name: true, floor: true, capacity: true },
   });
-
   if (!room) redirect("/search");
 
   const dayStart = buildDateTime(clampedDate, "00:00");
   const dayEnd = buildDateTime(clampedDate, "23:59");
 
-  // ✅ 與 createReservation 的規則一致：以 status 判斷有效預約
   const existing = await prisma.reservation.findMany({
     where: {
       roomId: room.id,
@@ -165,7 +159,6 @@ export default async function NewReservationPage({
   const hasConflict = existing.some((r) =>
     overlaps(startAt, endAt, r.startAt, r.endAt)
   );
-
   const isBlockedNow = hasConflict || errorConflict;
 
   const titlePrefix = room.floor ? `${room.floor}・` : "";
@@ -175,12 +168,39 @@ export default async function NewReservationPage({
     clampedDate
   )}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
 
-  // ✅ 關閉提示用：把 updated/error 都清掉
   const currentHrefClean = `/reservations/new?roomId=${encodeURIComponent(
     room.id
   )}&date=${encodeURIComponent(clampedDate)}&start=${encodeURIComponent(
     start
   )}&end=${encodeURIComponent(end)}`;
+
+  // ✅ 安全 fallback：employee -> user -> []
+  const p: any = prisma;
+
+  const rawPeople: {
+    id: string;
+    name: string | null;
+    dept?: string | null;
+    email?: string | null;
+  }[] = p?.employee?.findMany
+    ? await p.employee.findMany({
+        select: { id: true, name: true, dept: true, email: true },
+        orderBy: [{ dept: "asc" }, { name: "asc" }],
+      })
+    : p?.user?.findMany
+    ? await p.user.findMany({
+        select: { id: true, name: true, dept: true, email: true },
+        orderBy: [{ dept: "asc" }, { name: "asc" }],
+      })
+    : [];
+
+  // ✅ 這裡要符合你目前 AttendeePicker 的型別：dept/email 為 string|null
+  const attendeeOptions: AttendeeOption[] = rawPeople.map((e) => ({
+    id: e.id,
+    name: e.name ?? "（未命名）",
+    dept: e.dept?.trim() ? e.dept.trim() : "未分類",
+    email: e.email?.trim() ? e.email.trim() : null,
+  }));
 
   async function action(formData: FormData) {
     "use server";
@@ -204,10 +224,6 @@ export default async function NewReservationPage({
       "17:30"
     );
 
-    if (!room) {
-      redirect("/reservations");
-    }
-    
     redirect(
       `/reservations/new?roomId=${encodeURIComponent(
         room.id
@@ -217,7 +233,6 @@ export default async function NewReservationPage({
     );
   }
 
-  // ✅ 送出失敗（error=conflict）也要自動展開修改時間
   const openEditPanel = hasConflict || errorConflict;
 
   return (
@@ -228,7 +243,6 @@ export default async function NewReservationPage({
       </div>
 
       <div className="mt-6 rounded-2xl border border-zinc-200 bg-white p-5">
-        {/* ✅ 1) 送出失敗（被搶走）優先顯示 */}
         {errorConflict ? (
           <div className="mb-5 flex flex-col gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 md:flex-row md:items-start md:justify-between">
             <div>
@@ -253,7 +267,6 @@ export default async function NewReservationPage({
           </div>
         ) : null}
 
-        {/* ✅ 2) 更新條件提示（只有 updated=1 且沒有 errorConflict 才顯示） */}
         {!errorConflict && wasUpdated ? (
           <div
             className={[
@@ -411,7 +424,6 @@ export default async function NewReservationPage({
               </form>
             </details>
 
-            {/* ✅ 桌機保留按鈕版「返回搜尋」，手機隱藏 */}
             <div className="mt-4 hidden lg:block">
               <Link
                 href={backToSearchHref}
@@ -464,6 +476,14 @@ export default async function NewReservationPage({
                 ) : null}
               </div>
 
+              {/* ✅ 改成符合新 AttendeePicker props */}
+              <AttendeePicker
+                employees={attendeeOptions}
+                fieldName="attendeeIds"
+                defaultSelectedIds={[]}
+                searchable
+              />
+
               <div className="mt-6 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 text-sm">
                 <div className="font-semibold text-zinc-900">本次預約</div>
                 <div className="mt-2 text-zinc-700">
@@ -478,7 +498,6 @@ export default async function NewReservationPage({
                 </div>
               </div>
 
-              {/* ✅ 手機：返回搜尋放到底部區域（在固定 CTA 上方） */}
               <div className="pt-2 text-center lg:hidden">
                 <Link
                   href={backToSearchHref}
@@ -488,7 +507,6 @@ export default async function NewReservationPage({
                 </Link>
               </div>
 
-              {/* ✅ CTA：手機 fixed，桌機 normal */}
               <div
                 className={[
                   "fixed inset-x-0 bottom-0 z-50 border-t border-zinc-200 bg-white/95 p-4 backdrop-blur",

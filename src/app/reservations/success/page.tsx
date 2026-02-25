@@ -65,7 +65,6 @@ export default async function ReservationSuccessPage({
       endAt: true,
       title: true,
       headcount: true,
-      department: true,
       room: {
         select: {
           id: true,
@@ -83,7 +82,7 @@ export default async function ReservationSuccessPage({
   const startText = formatHM(reservation.startAt);
   const endText = formatHM(reservation.endAt);
 
-  // ✅ 繼續預約：回到 search，保留同一天 & 同時段（可改成你想要的預設）
+  // ✅ 繼續預約：回到 search，保留同一天 & 同時段
   const searchHref =
     `/search?date=${encodeURIComponent(formatYmdDash(reservation.startAt))}` +
     `&start=${encodeURIComponent(startText)}` +
@@ -139,13 +138,6 @@ export default async function ReservationSuccessPage({
               <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
                 <div className="text-zinc-500 sm:w-20">人數</div>
                 <div>{reservation.headcount}</div>
-              </div>
-            ) : null}
-
-            {reservation.department ? (
-              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
-                <div className="text-zinc-500 sm:w-20">部門</div>
-                <div>{reservation.department}</div>
               </div>
             ) : null}
           </div>

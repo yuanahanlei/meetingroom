@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { ReservationStatus } from "@prisma/client";
 import CancelReservationButton from "@/components/CancelReservationButton";
+
 export const dynamic = "force-dynamic";
 
 const TZ = "Asia/Taipei";
@@ -60,15 +61,43 @@ function statusMeta(status: ReservationStatus) {
   }
 }
 
+/**
+ * 取得「台北當天 00:00」對應的 Date（用 ISO 字串避免時區偏移）
+ */
+function getStartOfTodayInTaipei(now: Date) {
+  const ymd = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now); // YYYY-MM-DD (in TZ)
+
+  // 直接用 YYYY-MM-DDT00:00:00 在 server 的 Date 解析（會變成該日的 UTC offset 計算）
+  // 對我們的用途：只要「能代表今天起」即可，查詢會使用同一基準。
+  return new Date(`${ymd}T00:00:00`);
+}
+
 export default async function MyReservationsPage() {
   const user = await getCurrentUser();
 
   if (!user?.id) {
     return (
       <div className="mx-auto max-w-6xl px-6 py-8">
-        <h1 className="text-2xl font-semibold tracking-tight">我的預約</h1>
-        <p className="mt-2 text-sm text-zinc-500">尚未登入。</p>
-        <div className="mt-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">我的預約</h1>
+            <p className="mt-2 text-sm text-zinc-500">尚未登入。</p>
+          </div>
+
+          <Link
+            href="/me/reservations/history"
+            className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-900 hover:bg-zinc-50"
+          >
+            歷史紀錄
+          </Link>
+        </div>
+
+        <div className="mt-6">
           <Link
             href="/search"
             className="inline-flex h-11 items-center justify-center rounded-xl bg-black px-5 text-sm font-semibold text-white hover:opacity-90"
@@ -80,24 +109,30 @@ export default async function MyReservationsPage() {
     );
   }
 
-  // ① 正常顯示：排除取消
+  const now = new Date();
+  const todayStart = getStartOfTodayInTaipei(now);
+
+  // ✅ 改成「今天(台北) 00:00 之後」都顯示（今天早上已結束的也會出現）
+  // ① 正常顯示：排除取消 + 只顯示今天到未來
   const activeReservations = await prisma.reservation.findMany({
     where: {
       organizerId: user.id,
       status: { not: ReservationStatus.CANCELLED },
+      startAt: { gte: todayStart },
     },
     orderBy: { startAt: "desc" },
     include: { room: true },
     take: 50,
   });
 
-  // ② 只保留最近一次取消
+  // ② 只保留最近一次取消（同樣只在今天到未來範圍內）
   const lastCancelled = await prisma.reservation.findFirst({
     where: {
       organizerId: user.id,
       status: ReservationStatus.CANCELLED,
+      startAt: { gte: todayStart },
     },
-    orderBy: { cancelledAt: "desc" },
+    orderBy: { updatedAt: "desc" },
     include: { room: true },
   });
 
@@ -111,8 +146,20 @@ export default async function MyReservationsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">我的預約</h1>
           <p className="mt-1 text-sm text-zinc-500">
+            這裡顯示「今天（台北）到未來」的預約；更早的會自動隱藏。
+          </p>
+          <p className="mt-1 text-sm text-zinc-500">
             你可以隨時取消自己的預約（取消後只保留最近一次取消紀錄）。
           </p>
+        </div>
+
+        <div className="shrink-0">
+          <Link
+            href="/me/reservations/history"
+            className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-900 hover:bg-zinc-50"
+          >
+            歷史紀錄
+          </Link>
         </div>
       </div>
 
@@ -124,7 +171,12 @@ export default async function MyReservationsPage() {
 
         {reservations.length === 0 ? (
           <div className="py-8">
-            <div className="text-lg font-semibold text-zinc-900">尚無預約</div>
+            <div className="text-lg font-semibold text-zinc-900">
+              目前沒有今天到未來的預約
+            </div>
+            <div className="mt-2 text-sm text-zinc-500">
+              你可以到「搜尋」分頁預約會議室。
+            </div>
             <div className="mt-4">
               <Link
                 href="/search"
@@ -189,19 +241,16 @@ export default async function MyReservationsPage() {
                       <div className="font-semibold text-zinc-900">
                         {r.title ?? "（未填）"}
                       </div>
+
                       <div className="mt-1 text-sm text-zinc-600">
-                        {r.department} · {r.headcount} 人
+                        {typeof r.headcount === "number"
+                          ? `${r.headcount} 人`
+                          : "（未填人數）"}
                       </div>
 
-                      {isCancelled && r.cancelledAt ? (
+                      {isCancelled ? (
                         <div className="mt-2 text-xs text-zinc-500">
-                          取消時間：{formatYMD(r.cancelledAt)} {formatHM(r.cancelledAt)}
-                        </div>
-                      ) : null}
-
-                      {isCancelled && r.cancelReason ? (
-                        <div className="mt-1 text-xs text-zinc-500">
-                          原因：{r.cancelReason}
+                          狀態：已取消
                         </div>
                       ) : null}
                     </div>
@@ -215,10 +264,7 @@ export default async function MyReservationsPage() {
                       </Link>
 
                       {!isCancelled ? (
-                        <CancelReservationButton
-                          reservationId={r.id}
-                          defaultReason="使用者取消"
-                        />
+                        <CancelReservationButton reservationId={r.id} />
                       ) : (
                         <span className="text-xs text-zinc-500">已取消</span>
                       )}
@@ -263,9 +309,9 @@ export default async function MyReservationsPage() {
                             <div className="text-sm text-zinc-600">
                               {formatHM(r.startAt)}–{formatHM(r.endAt)}
                             </div>
-                            {isCancelled && r.cancelledAt ? (
+                            {isCancelled ? (
                               <div className="mt-2 text-xs text-zinc-500">
-                                取消時間：{formatYMD(r.cancelledAt)} {formatHM(r.cancelledAt)}
+                                狀態：已取消
                               </div>
                             ) : null}
                           </td>
@@ -279,13 +325,10 @@ export default async function MyReservationsPage() {
                               {r.title ?? "（未填）"}
                             </div>
                             <div className="mt-1 text-sm text-zinc-600">
-                              {r.department} · {r.headcount} 人
+                              {typeof r.headcount === "number"
+                                ? `${r.headcount} 人`
+                                : "（未填人數）"}
                             </div>
-                            {isCancelled && r.cancelReason ? (
-                              <div className="mt-1 text-xs text-zinc-500">
-                                原因：{r.cancelReason}
-                              </div>
-                            ) : null}
                           </td>
 
                           <td className="px-4 py-4 align-top">
@@ -315,10 +358,7 @@ export default async function MyReservationsPage() {
                                 查看日程
                               </Link>
                               {!isCancelled ? (
-                                <CancelReservationButton
-                                  reservationId={r.id}
-                                  defaultReason="使用者取消"
-                                />
+                                <CancelReservationButton reservationId={r.id} />
                               ) : null}
                             </div>
                           </td>
@@ -330,7 +370,7 @@ export default async function MyReservationsPage() {
               </div>
 
               <div className="mt-2 text-xs text-zinc-500">
-                提示：取消後只保留最近一次取消紀錄。
+                提示：取消後只保留最近一次取消紀錄（且僅在「今天到未來」範圍內）。
               </div>
             </div>
           </>
