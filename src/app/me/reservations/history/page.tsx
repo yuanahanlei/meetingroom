@@ -1,9 +1,8 @@
 import Link from "next/link";
-import { prisma } from "@/lib/prisma";
-import { getCurrentUser } from "@/lib/auth";
 import { ReservationStatus } from "@prisma/client";
 
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 const TZ = "Asia/Taipei";
 
@@ -60,7 +59,183 @@ function statusMeta(status: ReservationStatus) {
   }
 }
 
+type HistoryRow = {
+  id: string;
+  startAt: Date;
+  endAt: Date;
+  title: string | null;
+  headcount: number | null;
+  status: ReservationStatus;
+  room: { floor: string | null; name: string } | null;
+};
+
 export default async function ReservationHistoryPage() {
+  const hasDb = !!process.env.DATABASE_URL;
+
+  // ✅ Demo 模式：不跑 auth / DB，直接給展示資料
+  if (!hasDb) {
+    const now = new Date();
+    const demo: HistoryRow[] = [
+      {
+        id: "demo1",
+        startAt: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000 + 9 * 60 * 60 * 1000),
+        endAt: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000 + 10 * 60 * 60 * 1000),
+        title: "Demo：POA 會議",
+        headcount: 8,
+        status: ReservationStatus.CONFIRMED,
+        room: { floor: "3F", name: "示範會議室 A" },
+      },
+      {
+        id: "demo2",
+        startAt: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000 + 14 * 60 * 60 * 1000),
+        endAt: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000 + 15 * 60 * 60 * 1000),
+        title: null,
+        headcount: null,
+        status: ReservationStatus.CANCELLED,
+        room: { floor: "2F", name: "示範會議室 C" },
+      },
+    ];
+
+    return (
+      <div className="mx-auto max-w-6xl px-6 py-8">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">歷史紀錄</h1>
+            <p className="mt-1 text-sm text-zinc-500">
+              Demo 模式：未設定 DATABASE_URL，以下為示範資料（僅供展示）。
+            </p>
+          </div>
+
+          <div className="shrink-0">
+            <Link
+              href="/me/reservations"
+              className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-900 hover:bg-zinc-50"
+            >
+              回到我的預約
+            </Link>
+          </div>
+        </div>
+
+        <div className="mt-6 rounded-2xl border border-zinc-200 bg-white p-5">
+          {/* Mobile */}
+          <div className="mt-1 grid grid-cols-1 gap-4 md:hidden">
+            {demo.map((r) => {
+              const meta = statusMeta(r.status);
+              const dateText = formatYMD(r.startAt);
+              const timeText = `${formatHM(r.startAt)}–${formatHM(r.endAt)}`;
+
+              return (
+                <div
+                  key={r.id}
+                  className="rounded-2xl border border-zinc-200 bg-white p-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-base font-semibold text-zinc-900">
+                        {dateText}　{timeText}
+                      </div>
+                      <div className="mt-1 text-sm text-zinc-500">
+                        {roomLabel(r.room)}
+                      </div>
+                    </div>
+
+                    <span
+                      className={[
+                        "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1",
+                        meta.cls,
+                      ].join(" ")}
+                    >
+                      {meta.text}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 rounded-xl border border-zinc-100 bg-zinc-50 p-3">
+                    <div className="font-semibold text-zinc-900">
+                      {r.title ?? "（未填）"}
+                    </div>
+                    <div className="mt-1 text-sm text-zinc-600">
+                      {typeof r.headcount === "number"
+                        ? `${r.headcount} 人`
+                        : "（未填人數）"}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Desktop */}
+          <div className="mt-1 hidden md:block">
+            <div className="overflow-hidden rounded-2xl border border-zinc-200">
+              <table className="min-w-full border-collapse">
+                <thead className="bg-zinc-50">
+                  <tr className="text-left text-sm text-zinc-600">
+                    <th className="px-4 py-3 font-semibold">時間</th>
+                    <th className="px-4 py-3 font-semibold">會議室</th>
+                    <th className="px-4 py-3 font-semibold">會議</th>
+                    <th className="px-4 py-3 font-semibold">狀態</th>
+                  </tr>
+                </thead>
+
+                <tbody className="divide-y divide-zinc-100 bg-white">
+                  {demo.map((r) => {
+                    const meta = statusMeta(r.status);
+                    return (
+                      <tr key={r.id}>
+                        <td className="px-4 py-4 align-top">
+                          <div className="font-semibold text-zinc-900">
+                            {formatYMD(r.startAt)}
+                          </div>
+                          <div className="text-sm text-zinc-600">
+                            {formatHM(r.startAt)}–{formatHM(r.endAt)}
+                          </div>
+                        </td>
+
+                        <td className="px-4 py-4 align-top text-sm text-zinc-700">
+                          {roomLabel(r.room)}
+                        </td>
+
+                        <td className="px-4 py-4 align-top">
+                          <div className="text-sm font-semibold text-zinc-900">
+                            {r.title ?? "（未填）"}
+                          </div>
+                          <div className="mt-1 text-sm text-zinc-600">
+                            {typeof r.headcount === "number"
+                              ? `${r.headcount} 人`
+                              : "（未填人數）"}
+                          </div>
+                        </td>
+
+                        <td className="px-4 py-4 align-top">
+                          <span
+                            className={[
+                              "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1",
+                              meta.cls,
+                            ].join(" ")}
+                          >
+                            {meta.text}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-2 text-xs text-zinc-500">
+              提示：歷史紀錄僅顯示已結束的預約（Demo 資料）。
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ✅ 真實模式：runtime 才載入 auth + prisma（避免 build 階段 collect data 炸）
+  const { getCurrentUser } = await import("@/lib/auth");
+  const { prisma } = await import("@/lib/prisma");
+
   const user = await getCurrentUser();
 
   if (!user?.id) {
@@ -82,12 +257,10 @@ export default async function ReservationHistoryPage() {
 
   const now = new Date();
 
-  // ✅ 只顯示「已結束」：endAt < now
   const history = await prisma.reservation.findMany({
     where: {
       organizerId: user.id,
       endAt: { lt: now },
-      // 這裡不排除 CANCELLED，因為歷史本來就應該看得到取消
     },
     orderBy: { startAt: "desc" },
     include: { room: true },
