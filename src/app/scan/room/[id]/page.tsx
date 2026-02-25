@@ -1,15 +1,14 @@
 import Link from "next/link";
-import { scanRoom } from "@/app/actions/scan";
-import { getCurrentUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+export const runtime = "nodejs";
 
 type Params = { id: string };
 
 function formatLocal(d: Date) {
   try {
-    return d.toLocaleString("zh-TW");
+    return d.toLocaleString("zh-Hant-TW", { hour12: false });
   } catch {
     return d.toISOString();
   }
@@ -20,31 +19,23 @@ export default async function ScanRoomPage({
 }: {
   params: Promise<Params> | Params;
 }) {
-  const p = (await params) as Params;
-  const { id } = p;
+  const { id } = (await params) as Params;
 
   const hasDb = !!process.env.DATABASE_URL;
-
-  // ✅ user 可能拿不到（mock auth 也可能沒設 env），所以要保護
-  let user: any = null;
-  try {
-    user = await getCurrentUser();
-  } catch (e) {
-    console.error("getCurrentUser error:", e);
-    user = null;
-  }
 
   // ----------------------------
   // ✅ Demo 模式：沒 DB 也能展示
   // ----------------------------
   if (!hasDb) {
+    // demo user：不碰 auth（避免 env 沒設又出錯）
     const demoRoom = { id, floor: "3F", name: "示範會議室 A" };
-    const demoUser = user?.name ? user : { id: "demo-user", name: "Demo 使用者" };
+    const demoUser = { id: "demo-user", name: "Demo 使用者" };
 
     return (
       <div className="container">
         <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-          目前為 <span className="font-semibold">Demo 模式</span>（未設定 DATABASE_URL），此頁使用示範資料供展示。
+          目前為 <span className="font-semibold">Demo 模式</span>（未設定
+          DATABASE_URL），此頁使用示範資料供展示。
         </div>
 
         <h1 className="h1">掃碼報到（Phase 1）</h1>
@@ -65,11 +56,12 @@ export default async function ScanRoomPage({
                 {demoRoom.floor} · {demoRoom.name}
               </div>
               <div className="muted small">
-                登入者（Mock）：{demoUser?.name ?? "尚未登入"}
+                登入者（Mock）：{demoUser.name}
               </div>
             </div>
+
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <Link className="btn" href={`/rooms/${demoRoom.id}`}>
+              <Link className="btn" href={`/rooms/${encodeURIComponent(demoRoom.id)}`}>
                 會議室日程
               </Link>
               <Link className="btn" href="/search">
@@ -84,7 +76,7 @@ export default async function ScanRoomPage({
           <form
             action={async () => {
               "use server";
-              // 不做任何事，避免誤導寫入
+              // Demo 模式不做任何事
             }}
           >
             <button className="btn primary" type="submit">
@@ -119,10 +111,20 @@ export default async function ScanRoomPage({
   }
 
   // ----------------------------
-  // ✅ 真實模式：runtime 才 import prisma + 查 DB
+  // ✅ 真實模式：runtime 才 import prisma + auth + action
   // ----------------------------
   try {
-    const { prisma } = await import("@/lib/prisma");
+    const [{ prisma }, auth, scan] = await Promise.all([
+      import("@/lib/prisma"),
+      import("@/lib/auth"),
+      import("@/app/actions/scan"),
+    ]);
+
+    // ✅ user 可能拿不到（mock auth 沒設 env），所以要保護
+    const user = await auth.getCurrentUser().catch((e) => {
+      console.error("getCurrentUser error:", e);
+      return null;
+    });
 
     const room = await prisma.room.findUnique({
       where: { id },
@@ -131,7 +133,6 @@ export default async function ScanRoomPage({
 
     if (!room) return <div className="container">找不到會議室</div>;
 
-    // user 可能為 null，這裡用安全邏輯
     const userId = user?.id ?? null;
 
     const logs =
@@ -167,14 +168,12 @@ export default async function ScanRoomPage({
                 登入者（Mock）：{user?.name ?? "尚未登入"}
               </div>
               {!user?.id ? (
-                <div className="muted small">
-                  ※ 尚未登入時不會讀取/寫入掃碼紀錄
-                </div>
+                <div className="muted small">※ 尚未登入時不會讀取/寫入掃碼紀錄</div>
               ) : null}
             </div>
 
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <Link className="btn" href={`/rooms/${room.id}`}>
+              <Link className="btn" href={`/rooms/${encodeURIComponent(room.id)}`}>
                 會議室日程
               </Link>
               <Link className="btn" href="/search">
@@ -188,10 +187,13 @@ export default async function ScanRoomPage({
           <form
             action={async () => {
               "use server";
-              // ✅ 有登入才寫入
-              const u = await getCurrentUser().catch(() => null);
+              // ✅ 有登入才寫入（這裡再次取一次 user，避免外層 user 失效）
+              const auth2 = await import("@/lib/auth");
+              const scan2 = await import("@/app/actions/scan");
+              const u = await auth2.getCurrentUser().catch(() => null);
               if (!u?.id) return;
-              await scanRoom(room.id);
+
+              await scan2.scanRoom(room.id);
             }}
           >
             <button className="btn primary" type="submit" disabled={!user?.id}>
@@ -202,6 +204,7 @@ export default async function ScanRoomPage({
           <hr />
 
           <div className="h2">最近 10 筆掃碼紀錄</div>
+
           {!user?.id ? (
             <p className="muted">尚未登入，無法顯示個人掃碼紀錄。</p>
           ) : logs.length === 0 ? (
@@ -240,11 +243,11 @@ export default async function ScanRoomPage({
       </div>
     );
   } catch (e) {
-    console.error("ScanRoomPage DB error:", e);
+    console.error("ScanRoomPage error:", e);
     return (
       <div className="container">
         <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">
-          系統暫時無法連線資料庫，請稍後再試。
+          系統暫時無法連線資料庫或載入登入資訊，請稍後再試。
         </div>
       </div>
     );
