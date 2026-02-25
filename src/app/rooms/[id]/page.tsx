@@ -1,7 +1,9 @@
 import Link from "next/link";
-import { prisma } from "@/lib/prisma";
 import { combineDateTime } from "@/lib/time";
 import { ReservationStatus } from "@prisma/client";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 type Params = { id: string };
 type SearchParams = {
@@ -81,15 +83,32 @@ function formatHMInTZ(d: Date, timeZone: string) {
   }).format(d);
 }
 
+type RoomLite = {
+  id: string;
+  name: string;
+  floor: string | null;
+  capacity: number | null;
+};
+
+type ReservationLite = {
+  id: string;
+  startAt: Date;
+  endAt: Date;
+  status: ReservationStatus;
+  organizer: { name: string | null; dept: string | null } | null;
+};
+
 export default async function RoomPage({
   params,
   searchParams,
 }: {
-  params: Promise<Params>;
-  searchParams: Promise<SearchParams>;
+  params: Promise<Params> | Params;
+  searchParams: Promise<SearchParams> | SearchParams;
 }) {
-  const { id } = await params;
-  const sp = await searchParams;
+  const p = (await params) as Params;
+  const sp = (await searchParams) as SearchParams;
+
+  const { id } = p;
 
   // ✅ 日期可選範圍：今天 ～ 今天+2個月（台北時區）
   const now = new Date();
@@ -102,10 +121,92 @@ export default async function RoomPage({
   const view: "available" | "all" = sp.view === "all" ? "all" : "available";
   const showUpdatedBanner = sp.updated === "1";
 
-  const room = await prisma.room.findUnique({
-    where: { id },
-    select: { id: true, name: true, floor: true, capacity: true },
-  });
+  const hasDb = !!process.env.DATABASE_URL;
+
+  // ✅ 只顯示 08:30–17:30（不可跨日）
+  const dayStart = combineDateTime(date, "08:30");
+  const dayEnd = combineDateTime(date, "17:30");
+
+  let room: RoomLite | null = null;
+  let reservations: ReservationLite[] = [];
+
+  // ----------------------------
+  // ✅ Demo 模式：沒 DB 也能展示這頁
+  // ----------------------------
+  if (!hasDb) {
+    room = {
+      id,
+      name: "示範會議室 A",
+      floor: "3F",
+      capacity: 10,
+    };
+
+    reservations = [
+      {
+        id: "demo-r1",
+        startAt: combineDateTime(date, "09:00"),
+        endAt: combineDateTime(date, "10:00"),
+        status: ReservationStatus.CONFIRMED,
+        organizer: { name: "王小明", dept: "SCOT 北區" },
+      },
+      {
+        id: "demo-r2",
+        startAt: combineDateTime(date, "14:00"),
+        endAt: combineDateTime(date, "15:30"),
+        status: ReservationStatus.BLOCKED,
+        organizer: { name: "系統維護", dept: "IT" },
+      },
+    ];
+  } else {
+    // ----------------------------
+    // ✅ 真實模式：runtime 才 import prisma + 查 DB（避免 Vercel build collect data 爆）
+    // ----------------------------
+    try {
+      const { prisma } = await import("@/lib/prisma");
+
+      room = await prisma.room.findUnique({
+        where: { id },
+        select: { id: true, name: true, floor: true, capacity: true },
+      });
+
+      if (!room) {
+        return (
+          <div className="mx-auto max-w-6xl px-6 py-8">
+            <div className="rounded-2xl border border-zinc-200 bg-white p-5">
+              找不到會議室
+            </div>
+          </div>
+        );
+      }
+
+      reservations = (await prisma.reservation.findMany({
+        where: {
+          roomId: id,
+          status: { in: [ReservationStatus.CONFIRMED, ReservationStatus.BLOCKED] },
+          startAt: { lt: dayEnd },
+          endAt: { gt: dayStart },
+        },
+        orderBy: { startAt: "asc" },
+        select: {
+          id: true,
+          startAt: true,
+          endAt: true,
+          status: true,
+          organizer: { select: { name: true, dept: true } },
+        },
+      })) as ReservationLite[];
+    } catch (e) {
+      console.error("RoomPage DB error:", e);
+      return (
+        <div className="mx-auto max-w-6xl px-6 py-8">
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-900">
+            系統暫時無法連線資料庫，請稍後再試。
+          </div>
+        </div>
+      );
+    }
+  }
+
   if (!room) {
     return (
       <div className="mx-auto max-w-6xl px-6 py-8">
@@ -115,27 +216,6 @@ export default async function RoomPage({
       </div>
     );
   }
-
-  // ✅ 只顯示 08:30–17:30（不可跨日）
-  const dayStart = combineDateTime(date, "08:30");
-  const dayEnd = combineDateTime(date, "17:30");
-
-  const reservations = await prisma.reservation.findMany({
-    where: {
-      roomId: id,
-      status: { in: [ReservationStatus.CONFIRMED, ReservationStatus.BLOCKED] },
-      startAt: { lt: dayEnd },
-      endAt: { gt: dayStart },
-    },
-    orderBy: { startAt: "asc" },
-    select: {
-      id: true,
-      startAt: true,
-      endAt: true,
-      status: true,
-      organizer: { select: { name: true, dept: true } },
-    },
-  });
 
   const findBusy = (slotStart: Date, slotEnd: Date) => {
     return reservations.find((r) => r.startAt < slotEnd && r.endAt > slotStart);
@@ -174,6 +254,13 @@ export default async function RoomPage({
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-8">
+      {/* ✅ Demo banner */}
+      {!hasDb ? (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          目前為 <span className="font-semibold">Demo 模式</span>（未設定 DATABASE_URL），此頁使用示範資料供展示。
+        </div>
+      ) : null}
+
       {/* 頁首 */}
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
@@ -301,7 +388,7 @@ export default async function RoomPage({
           </div>
         </div>
 
-        {/* ✅ 時段清單：用 Grid 固定右欄，避免中間「一大片空白」 */}
+        {/* ✅ 時段清單 */}
         <div className="mt-4 space-y-3">
           {shownRows.length === 0 ? (
             <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-700">
@@ -320,7 +407,6 @@ export default async function RoomPage({
                   ].join(" ")}
                 >
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto] sm:items-center">
-                    {/* 左：內容 */}
                     <div className="min-w-0">
                       <div className="text-lg font-semibold text-zinc-900">
                         {s.start} – {s.end}
@@ -335,7 +421,6 @@ export default async function RoomPage({
                       )}
                     </div>
 
-                    {/* 右：按鈕（固定欄） */}
                     <div className="justify-self-start sm:justify-self-end">
                       {isBusy ? (
                         <span className="inline-flex h-10 items-center justify-center rounded-xl border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-500">

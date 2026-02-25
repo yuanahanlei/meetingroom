@@ -1,6 +1,8 @@
 import Link from "next/link";
-import { prisma } from "@/lib/prisma";
 import { ReservationStatus } from "@prisma/client";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 type SearchParams = {
   date?: string; // YYYY-MM-DD
@@ -120,12 +122,19 @@ function floorSortKey(floor: string | null | undefined) {
   return Number.POSITIVE_INFINITY;
 }
 
+type RoomRow = {
+  id: string;
+  name: string;
+  floor: string | null;
+  capacity: number | null;
+};
+
 export default async function SearchPage({
   searchParams,
 }: {
-  searchParams: Promise<SearchParams>;
+  searchParams: Promise<SearchParams> | SearchParams;
 }) {
-  const sp = await searchParams;
+  const sp = (await searchParams) as SearchParams;
 
   // 日期可選範圍：今天 ～ 今天+2個月（台北時區）
   const now = new Date();
@@ -143,86 +152,6 @@ export default async function SearchPage({
   let endAt = buildDateTime(date, end);
   if (endAt <= startAt) endAt = new Date(startAt.getTime() + 30 * 60 * 1000);
 
-  const roomsRaw = await prisma.room.findMany({
-    select: {
-      id: true,
-      name: true,
-      floor: true,
-      capacity: true,
-    },
-  });
-
-  const rooms = roomsRaw
-    .slice()
-    .sort(
-      (a, b) =>
-        floorSortKey(a.floor) - floorSortKey(b.floor) ||
-        a.name.localeCompare(b.name, "zh-Hant")
-    );
-
-  const dayStart = buildDateTime(date, "00:00");
-  const dayEnd = buildDateTime(date, "23:59");
-
-  // ✅ 改成用 status 判斷有效預約（取 CONFIRMED / BLOCKED）
-  const reservations = await prisma.reservation.findMany({
-    where: {
-      status: { in: [ReservationStatus.CONFIRMED, ReservationStatus.BLOCKED] },
-      startAt: { lt: dayEnd },
-      endAt: { gt: dayStart },
-    },
-    select: {
-      roomId: true,
-      startAt: true,
-      endAt: true,
-      // ✅ 你的 schema 裡 organizer 是 Employee? 並有 name/dept
-      organizer: {
-        select: {
-          name: true,
-          dept: true,
-        },
-      },
-    },
-  });
-
-  const byRoom = new Map<
-    string,
-    {
-      start: Date;
-      end: Date;
-      organizer?: { name?: string | null; dept?: string | null } | null;
-    }[]
-  >();
-
-  for (const r of reservations) {
-    const arr = byRoom.get(r.roomId) ?? [];
-    arr.push({ start: r.startAt, end: r.endAt, organizer: (r as any).organizer });
-    byRoom.set(r.roomId, arr);
-  }
-
-  const roomCardsAll = rooms.map((room) => {
-    const rs = byRoom.get(room.id) ?? [];
-
-    const overlapRes =
-      rs.find((r) => overlaps(startAt, endAt, r.start, r.end)) ?? null;
-    const hasOverlap = !!overlapRes;
-    const hasAnyThatDay = rs.length > 0;
-
-    const availability: Availability = hasOverlap
-      ? "UNAVAILABLE"
-      : hasAnyThatDay
-      ? "PARTIAL"
-      : "AVAILABLE";
-
-    const bookedByName = overlapRes?.organizer?.name ?? null;
-    const bookedByDept = overlapRes?.organizer?.dept ?? null;
-
-    return { room, availability, hasOverlap, bookedByName, bookedByDept };
-  });
-
-  const roomCards = onlyAvailable
-    ? roomCardsAll.filter((x) => x.availability !== "UNAVAILABLE")
-    : roomCardsAll;
-
   const allHref = withParams("/search", { date, start, end });
   const onlyAvailHref = withParams("/search", {
     date,
@@ -231,214 +160,543 @@ export default async function SearchPage({
     onlyAvailable: "1",
   });
 
-  return (
-    <div className="mx-auto max-w-6xl px-6 py-8">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">搜尋會議室</h1>
-          <p className="mt-1 text-sm text-zinc-500">
-            可借時段：08:30–17:30（每 30 分鐘為單位）
-          </p>
+  // ✅ Demo / 無 DB：仍可展示 UI（不查 DB）
+  const hasDb = !!process.env.DATABASE_URL;
+  if (!hasDb) {
+    const demoRooms: RoomRow[] = [
+      { id: "demo-room-1", name: "會議室 A", floor: "3F", capacity: 8 },
+      { id: "demo-room-2", name: "會議室 B", floor: "3F", capacity: 12 },
+      { id: "demo-room-3", name: "會議室 C", floor: "2F", capacity: 6 },
+      { id: "demo-room-4", name: "會議室 D", floor: "B1", capacity: 10 },
+    ];
+
+    // 用「假狀態」做展示：照 roomId 固定分配
+    const roomCardsAll = demoRooms
+      .slice()
+      .sort(
+        (a, b) =>
+          floorSortKey(a.floor) - floorSortKey(b.floor) ||
+          a.name.localeCompare(b.name, "zh-Hant")
+      )
+      .map((room, idx) => {
+        const availability: Availability =
+          idx % 4 === 0 ? "UNAVAILABLE" : idx % 4 === 1 ? "PARTIAL" : "AVAILABLE";
+        const hasOverlap = availability === "UNAVAILABLE";
+        const bookedByName = hasOverlap ? "王小明" : null;
+        const bookedByDept = hasOverlap ? "SCOT 北區" : null;
+        return { room, availability, hasOverlap, bookedByName, bookedByDept };
+      });
+
+    const roomCards = onlyAvailable
+      ? roomCardsAll.filter((x) => x.availability !== "UNAVAILABLE")
+      : roomCardsAll;
+
+    return (
+      <div className="mx-auto max-w-6xl px-6 py-8">
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          目前為 <span className="font-semibold">Demo 模式</span>（未設定 DATABASE_URL），此頁使用示範資料供展示。
         </div>
-      </div>
 
-      <div className="mt-6 rounded-2xl border border-zinc-200 bg-white p-4">
-        <form>
-          <div className="flex flex-col gap-4 md:flex-row md:items-end md:gap-4">
-            <div className="md:flex-1">
-              <label className="block text-xs font-medium text-zinc-600">
-                日期
-              </label>
-              <input
-                name="date"
-                type="date"
-                defaultValue={date}
-                min={minDate}
-                max={maxDate}
-                className="mt-1 h-11 w-full rounded-xl border border-zinc-200 px-4 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-              />
-            </div>
-
-            <div className="md:w-56">
-              <label className="block text-xs font-medium text-zinc-600">
-                開始時間
-              </label>
-              <select
-                name="start"
-                defaultValue={start}
-                className="mt-1 h-11 w-full rounded-xl border border-zinc-200 px-4 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-              >
-                {timeOptions.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="md:w-56">
-              <label className="block text-xs font-medium text-zinc-600">
-                結束時間
-              </label>
-              <select
-                name="end"
-                defaultValue={end}
-                className="mt-1 h-11 w-full rounded-xl border border-zinc-200 px-4 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-              >
-                {timeOptions.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="md:w-28">
-              <button
-                type="submit"
-                className="h-11 w-full rounded-xl bg-black px-4 text-sm font-semibold text-white hover:opacity-90"
-              >
-                搜尋
-              </button>
-            </div>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">搜尋會議室</h1>
+            <p className="mt-1 text-sm text-zinc-500">
+              可借時段：08:30–17:30（每 30 分鐘為單位）
+            </p>
           </div>
+        </div>
 
-          <div className="mt-4 flex items-center justify-end">
-            <div className="inline-flex items-center rounded-xl border border-zinc-300 bg-zinc-50 p-1">
-              <Link
-                href={allHref}
-                className={[
-                  "rounded-lg px-3 py-2 text-sm font-medium transition",
-                  !onlyAvailable
-                    ? "bg-white shadow-sm text-zinc-900"
-                    : "text-zinc-600 hover:text-zinc-900",
-                ].join(" ")}
-                aria-current={!onlyAvailable ? "page" : undefined}
-              >
-                全部
-              </Link>
-              <Link
-                href={onlyAvailHref}
-                className={[
-                  "rounded-lg px-3 py-2 text-sm font-medium transition",
-                  onlyAvailable
-                    ? "bg-white shadow-sm text-zinc-900"
-                    : "text-zinc-600 hover:text-zinc-900",
-                ].join(" ")}
-                aria-current={onlyAvailable ? "page" : undefined}
-              >
-                可預約
-              </Link>
+        <div className="mt-6 rounded-2xl border border-zinc-200 bg-white p-4">
+          <form>
+            <div className="flex flex-col gap-4 md:flex-row md:items-end md:gap-4">
+              <div className="md:flex-1">
+                <label className="block text-xs font-medium text-zinc-600">
+                  日期
+                </label>
+                <input
+                  name="date"
+                  type="date"
+                  defaultValue={date}
+                  min={minDate}
+                  max={maxDate}
+                  className="mt-1 h-11 w-full rounded-xl border border-zinc-200 px-4 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+                />
+              </div>
+
+              <div className="md:w-56">
+                <label className="block text-xs font-medium text-zinc-600">
+                  開始時間
+                </label>
+                <select
+                  name="start"
+                  defaultValue={start}
+                  className="mt-1 h-11 w-full rounded-xl border border-zinc-200 px-4 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+                >
+                  {timeOptions.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="md:w-56">
+                <label className="block text-xs font-medium text-zinc-600">
+                  結束時間
+                </label>
+                <select
+                  name="end"
+                  defaultValue={end}
+                  className="mt-1 h-11 w-full rounded-xl border border-zinc-200 px-4 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+                >
+                  {timeOptions.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="md:w-28">
+                <button
+                  type="submit"
+                  className="h-11 w-full rounded-xl bg-black px-4 text-sm font-semibold text-white hover:opacity-90"
+                >
+                  搜尋
+                </button>
+              </div>
             </div>
-          </div>
-        </form>
-      </div>
 
-      <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
-        {roomCards.map(
-          ({ room, availability, hasOverlap, bookedByName, bookedByDept }) => {
-            const badge = badgeMeta(availability);
+            <div className="mt-4 flex items-center justify-end">
+              <div className="inline-flex items-center rounded-xl border border-zinc-300 bg-zinc-50 p-1">
+                <Link
+                  href={allHref}
+                  className={[
+                    "rounded-lg px-3 py-2 text-sm font-medium transition",
+                    !onlyAvailable
+                      ? "bg-white shadow-sm text-zinc-900"
+                      : "text-zinc-600 hover:text-zinc-900",
+                  ].join(" ")}
+                  aria-current={!onlyAvailable ? "page" : undefined}
+                >
+                  全部
+                </Link>
+                <Link
+                  href={onlyAvailHref}
+                  className={[
+                    "rounded-lg px-3 py-2 text-sm font-medium transition",
+                    onlyAvailable
+                      ? "bg-white shadow-sm text-zinc-900"
+                      : "text-zinc-600 hover:text-zinc-900",
+                  ].join(" ")}
+                  aria-current={onlyAvailable ? "page" : undefined}
+                >
+                  可預約
+                </Link>
+              </div>
+            </div>
+          </form>
+        </div>
 
-            const reserveHref = withParams("/reservations/new", {
-              roomId: room.id,
-              date,
-              start,
-              end,
-            });
+        <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
+          {roomCards.map(
+            ({ room, availability, hasOverlap, bookedByName, bookedByDept }) => {
+              const badge = badgeMeta(availability);
 
-            const scheduleHref = withParams(`/rooms/${room.id}`, { date });
+              const reserveHref = withParams("/reservations/new", {
+                roomId: room.id,
+                date,
+                start,
+                end,
+              });
 
-            const titlePrefix = room.floor ? `${room.floor}・` : "";
-            const title = `${titlePrefix}${room.name}`;
+              const scheduleHref = withParams(`/rooms/${room.id}`, { date });
 
-            const bookedText =
-              bookedByName && bookedByDept
-                ? `已被 ${bookedByName}（${bookedByDept}）預約`
-                : bookedByName
-                ? `已被 ${bookedByName} 預約`
-                : "此時段不可借";
+              const titlePrefix = room.floor ? `${room.floor}・` : "";
+              const title = `${titlePrefix}${room.name}`;
 
-            return (
-              <div
-                key={room.id}
-                className="flex flex-col rounded-2xl border border-zinc-200 bg-white p-5"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="truncate text-lg font-semibold">{title}</h3>
-                      <span
-                        className={[
-                          "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1",
-                          badge.cls,
-                        ].join(" ")}
-                      >
-                        {badge.text}
-                      </span>
+              const bookedText =
+                bookedByName && bookedByDept
+                  ? `已被 ${bookedByName}（${bookedByDept}）預約`
+                  : bookedByName
+                  ? `已被 ${bookedByName} 預約`
+                  : "此時段不可借";
+
+              return (
+                <div
+                  key={room.id}
+                  className="flex flex-col rounded-2xl border border-zinc-200 bg-white p-5"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="truncate text-lg font-semibold">{title}</h3>
+                        <span
+                          className={[
+                            "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1",
+                            badge.cls,
+                          ].join(" ")}
+                        >
+                          {badge.text}
+                        </span>
+                      </div>
+
+                      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-sm text-zinc-600">
+                        {typeof room.capacity === "number" ? (
+                          <span>建議 {room.capacity} 人</span>
+                        ) : null}
+                      </div>
                     </div>
 
-                    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-sm text-zinc-600">
-                      {typeof room.capacity === "number" ? (
-                        <span>建議 {room.capacity} 人</span>
-                      ) : null}
+                    <div className="shrink-0">
+                      {hasOverlap ? (
+                        <button
+                          type="button"
+                          disabled
+                          className="h-10 cursor-not-allowed rounded-xl bg-zinc-200 px-4 text-sm font-semibold text-zinc-500"
+                          title={bookedText}
+                        >
+                          已被預約
+                        </button>
+                      ) : (
+                        <Link
+                          href={reserveHref}
+                          className="inline-flex h-10 items-center justify-center rounded-xl bg-black px-4 text-sm font-semibold text-white hover:opacity-90"
+                        >
+                          預約
+                        </Link>
+                      )}
                     </div>
                   </div>
 
-                  <div className="shrink-0">
-                    {hasOverlap ? (
-                      <button
-                        type="button"
-                        disabled
-                        className="h-10 cursor-not-allowed rounded-xl bg-zinc-200 px-4 text-sm font-semibold text-zinc-500"
-                        title={bookedText}
-                      >
-                        已被預約
-                      </button>
+                  <div className="mt-4 flex items-center justify-between border-t border-zinc-100 pt-4">
+                    <Link
+                      href={scheduleHref}
+                      className="text-sm font-medium text-zinc-700 underline-offset-4 hover:underline"
+                    >
+                      查看時段
+                    </Link>
+
+                    {availability === "PARTIAL" ? (
+                      <span className="text-xs text-zinc-500">此日已有部分預約</span>
+                    ) : availability === "UNAVAILABLE" ? (
+                      <span className="text-xs font-medium text-rose-700">
+                        {bookedText}
+                      </span>
                     ) : (
-                      <Link
-                        href={reserveHref}
-                        className="inline-flex h-10 items-center justify-center rounded-xl bg-black px-4 text-sm font-semibold text-white hover:opacity-90"
-                      >
-                        預約
-                      </Link>
+                      <span className="text-xs text-zinc-400">此時段可借</span>
                     )}
                   </div>
                 </div>
+              );
+            }
+          )}
+        </div>
 
-                <div className="mt-4 flex items-center justify-between border-t border-zinc-100 pt-4">
-                  <Link
-                    href={scheduleHref}
-                    className="text-sm font-medium text-zinc-700 underline-offset-4 hover:underline"
-                  >
-                    查看時段
-                  </Link>
-
-                  {availability === "PARTIAL" ? (
-                    <span className="text-xs text-zinc-500">此日已有部分預約</span>
-                  ) : availability === "UNAVAILABLE" ? (
-                    <span className="text-xs font-medium text-rose-700">
-                      {bookedText}
-                    </span>
-                  ) : (
-                    <span className="text-xs text-zinc-400">此時段可借</span>
-                  )}
-                </div>
-              </div>
-            );
-          }
-        )}
-      </div>
-
-      {roomCards.length === 0 ? (
-        <div className="mt-10 rounded-2xl border border-zinc-200 bg-white p-8 text-center">
-          <div className="text-sm font-semibold text-zinc-900">
-            沒有符合條件的會議室
+        {roomCards.length === 0 ? (
+          <div className="mt-10 rounded-2xl border border-zinc-200 bg-white p-8 text-center">
+            <div className="text-sm font-semibold text-zinc-900">
+              沒有符合條件的會議室
+            </div>
+            <div className="mt-2 text-sm text-zinc-500">
+              你可以切回「全部」，或調整時間範圍再試一次。
+            </div>
           </div>
-          <div className="mt-2 text-sm text-zinc-500">
-            你可以切回「全部」，或調整時間範圍再試一次。
+        ) : null}
+      </div>
+    );
+  }
+
+  // ✅ 真實模式：runtime 才查 DB，並用 try/catch 保護
+  try {
+    const { prisma } = await import("@/lib/prisma");
+
+    const roomsRaw = await prisma.room.findMany({
+      select: { id: true, name: true, floor: true, capacity: true },
+    });
+
+    const rooms = roomsRaw
+      .slice()
+      .sort(
+        (a, b) =>
+          floorSortKey(a.floor) - floorSortKey(b.floor) ||
+          a.name.localeCompare(b.name, "zh-Hant")
+      );
+
+    const dayStart = buildDateTime(date, "00:00");
+    const dayEnd = buildDateTime(date, "23:59");
+
+    const reservations = await prisma.reservation.findMany({
+      where: {
+        status: { in: [ReservationStatus.CONFIRMED, ReservationStatus.BLOCKED] },
+        startAt: { lt: dayEnd },
+        endAt: { gt: dayStart },
+      },
+      select: {
+        roomId: true,
+        startAt: true,
+        endAt: true,
+        organizer: { select: { name: true, dept: true } },
+      },
+    });
+
+    const byRoom = new Map<
+      string,
+      {
+        start: Date;
+        end: Date;
+        organizer?: { name?: string | null; dept?: string | null } | null;
+      }[]
+    >();
+
+    for (const r of reservations) {
+      const arr = byRoom.get(r.roomId) ?? [];
+      arr.push({ start: r.startAt, end: r.endAt, organizer: (r as any).organizer });
+      byRoom.set(r.roomId, arr);
+    }
+
+    const roomCardsAll = rooms.map((room) => {
+      const rs = byRoom.get(room.id) ?? [];
+
+      const overlapRes =
+        rs.find((r) => overlaps(startAt, endAt, r.start, r.end)) ?? null;
+      const hasOverlap = !!overlapRes;
+      const hasAnyThatDay = rs.length > 0;
+
+      const availability: Availability = hasOverlap
+        ? "UNAVAILABLE"
+        : hasAnyThatDay
+        ? "PARTIAL"
+        : "AVAILABLE";
+
+      const bookedByName = overlapRes?.organizer?.name ?? null;
+      const bookedByDept = overlapRes?.organizer?.dept ?? null;
+
+      return { room, availability, hasOverlap, bookedByName, bookedByDept };
+    });
+
+    const roomCards = onlyAvailable
+      ? roomCardsAll.filter((x) => x.availability !== "UNAVAILABLE")
+      : roomCardsAll;
+
+    return (
+      <div className="mx-auto max-w-6xl px-6 py-8">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">搜尋會議室</h1>
+            <p className="mt-1 text-sm text-zinc-500">
+              可借時段：08:30–17:30（每 30 分鐘為單位）
+            </p>
           </div>
         </div>
-      ) : null}
-    </div>
-  );
+
+        <div className="mt-6 rounded-2xl border border-zinc-200 bg-white p-4">
+          <form>
+            <div className="flex flex-col gap-4 md:flex-row md:items-end md:gap-4">
+              <div className="md:flex-1">
+                <label className="block text-xs font-medium text-zinc-600">
+                  日期
+                </label>
+                <input
+                  name="date"
+                  type="date"
+                  defaultValue={date}
+                  min={minDate}
+                  max={maxDate}
+                  className="mt-1 h-11 w-full rounded-xl border border-zinc-200 px-4 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+                />
+              </div>
+
+              <div className="md:w-56">
+                <label className="block text-xs font-medium text-zinc-600">
+                  開始時間
+                </label>
+                <select
+                  name="start"
+                  defaultValue={start}
+                  className="mt-1 h-11 w-full rounded-xl border border-zinc-200 px-4 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+                >
+                  {timeOptions.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="md:w-56">
+                <label className="block text-xs font-medium text-zinc-600">
+                  結束時間
+                </label>
+                <select
+                  name="end"
+                  defaultValue={end}
+                  className="mt-1 h-11 w-full rounded-xl border border-zinc-200 px-4 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+                >
+                  {timeOptions.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="md:w-28">
+                <button
+                  type="submit"
+                  className="h-11 w-full rounded-xl bg-black px-4 text-sm font-semibold text-white hover:opacity-90"
+                >
+                  搜尋
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-center justify-end">
+              <div className="inline-flex items-center rounded-xl border border-zinc-300 bg-zinc-50 p-1">
+                <Link
+                  href={allHref}
+                  className={[
+                    "rounded-lg px-3 py-2 text-sm font-medium transition",
+                    !onlyAvailable
+                      ? "bg-white shadow-sm text-zinc-900"
+                      : "text-zinc-600 hover:text-zinc-900",
+                  ].join(" ")}
+                  aria-current={!onlyAvailable ? "page" : undefined}
+                >
+                  全部
+                </Link>
+                <Link
+                  href={onlyAvailHref}
+                  className={[
+                    "rounded-lg px-3 py-2 text-sm font-medium transition",
+                    onlyAvailable
+                      ? "bg-white shadow-sm text-zinc-900"
+                      : "text-zinc-600 hover:text-zinc-900",
+                  ].join(" ")}
+                  aria-current={onlyAvailable ? "page" : undefined}
+                >
+                  可預約
+                </Link>
+              </div>
+            </div>
+          </form>
+        </div>
+
+        <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
+          {roomCards.map(
+            ({ room, availability, hasOverlap, bookedByName, bookedByDept }) => {
+              const badge = badgeMeta(availability);
+
+              const reserveHref = withParams("/reservations/new", {
+                roomId: room.id,
+                date,
+                start,
+                end,
+              });
+
+              const scheduleHref = withParams(`/rooms/${room.id}`, { date });
+
+              const titlePrefix = room.floor ? `${room.floor}・` : "";
+              const title = `${titlePrefix}${room.name}`;
+
+              const bookedText =
+                bookedByName && bookedByDept
+                  ? `已被 ${bookedByName}（${bookedByDept}）預約`
+                  : bookedByName
+                  ? `已被 ${bookedByName} 預約`
+                  : "此時段不可借";
+
+              return (
+                <div
+                  key={room.id}
+                  className="flex flex-col rounded-2xl border border-zinc-200 bg-white p-5"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="truncate text-lg font-semibold">{title}</h3>
+                        <span
+                          className={[
+                            "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1",
+                            badge.cls,
+                          ].join(" ")}
+                        >
+                          {badge.text}
+                        </span>
+                      </div>
+
+                      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-sm text-zinc-600">
+                        {typeof room.capacity === "number" ? (
+                          <span>建議 {room.capacity} 人</span>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="shrink-0">
+                      {hasOverlap ? (
+                        <button
+                          type="button"
+                          disabled
+                          className="h-10 cursor-not-allowed rounded-xl bg-zinc-200 px-4 text-sm font-semibold text-zinc-500"
+                          title={bookedText}
+                        >
+                          已被預約
+                        </button>
+                      ) : (
+                        <Link
+                          href={reserveHref}
+                          className="inline-flex h-10 items-center justify-center rounded-xl bg-black px-4 text-sm font-semibold text-white hover:opacity-90"
+                        >
+                          預約
+                        </Link>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex items-center justify-between border-t border-zinc-100 pt-4">
+                    <Link
+                      href={scheduleHref}
+                      className="text-sm font-medium text-zinc-700 underline-offset-4 hover:underline"
+                    >
+                      查看時段
+                    </Link>
+
+                    {availability === "PARTIAL" ? (
+                      <span className="text-xs text-zinc-500">此日已有部分預約</span>
+                    ) : availability === "UNAVAILABLE" ? (
+                      <span className="text-xs font-medium text-rose-700">
+                        {bookedText}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-zinc-400">此時段可借</span>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+          )}
+        </div>
+
+        {roomCards.length === 0 ? (
+          <div className="mt-10 rounded-2xl border border-zinc-200 bg-white p-8 text-center">
+            <div className="text-sm font-semibold text-zinc-900">
+              沒有符合條件的會議室
+            </div>
+            <div className="mt-2 text-sm text-zinc-500">
+              你可以切回「全部」，或調整時間範圍再試一次。
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  } catch (e) {
+    console.error("SearchPage DB error:", e);
+    return (
+      <div className="mx-auto max-w-6xl px-6 py-8">
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-900">
+          系統暫時無法連線資料庫，請稍後再試。
+        </div>
+      </div>
+    );
+  }
 }
