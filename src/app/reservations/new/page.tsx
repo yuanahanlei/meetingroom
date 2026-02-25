@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { prisma } from "@/lib/prisma";
-import { createReservation } from "@/app/actions/reservations";
 import { ReservationStatus } from "@prisma/client";
 import AttendeePicker, { AttendeeOption } from "@/components/AttendeePicker";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 type SearchParams = {
   roomId?: string;
@@ -11,7 +12,7 @@ type SearchParams = {
   start?: string; // HH:mm
   end?: string; // HH:mm
   updated?: string; // "1"
-  error?: string; // "conflict" | ...
+  error?: string; // "conflict" | "demo" | ...
 };
 
 const TZ = "Asia/Taipei";
@@ -96,28 +97,39 @@ function toDisplayYMD(ymd: string) {
   return ymd.replaceAll("-", "/");
 }
 
+type RoomLite = {
+  id: string;
+  name: string;
+  floor: string | null;
+  capacity: number | null;
+};
+
 export default async function NewReservationPage({
   searchParams,
 }: {
-  searchParams: Promise<SearchParams>;
+  searchParams: SearchParams;
 }) {
-  const sp = await searchParams;
+  const hasDb = !!process.env.DATABASE_URL;
 
-  const roomId = sp.roomId;
-  if (!roomId) redirect("/search");
+  const roomId = searchParams.roomId;
 
-  const wasUpdated = sp.updated === "1";
-  const errorConflict = sp.error === "conflict";
+  // ✅ Demo 模式：即使沒有 roomId 也不要 redirect（可展示頁面）
+  // ✅ 真實模式：沒 roomId 才 redirect 回 search
+  if (!roomId && hasDb) redirect("/search");
+
+  const wasUpdated = searchParams.updated === "1";
+  const errorConflict = searchParams.error === "conflict";
+  const errorDemo = searchParams.error === "demo";
 
   const now = new Date();
   const minDate = formatYMDInTZ(now, TZ);
   const maxDate = formatYMDInTZ(addMonthsSafe(now, 2), TZ);
 
-  const rawDate = normalizeDateYmd(sp.date, minDate);
+  const rawDate = normalizeDateYmd(searchParams.date, minDate);
   const clampedDate = clampYmd(rawDate, minDate, maxDate);
 
-  const start = normalizeTimeHm(sp.start, "08:30");
-  const end = normalizeTimeHm(sp.end, "17:30");
+  const start = normalizeTimeHm(searchParams.start, "08:30");
+  const end = normalizeTimeHm(searchParams.end, "17:30");
 
   const timeOptions = generateTimeOptions("08:30", "17:30", 30);
 
@@ -126,9 +138,10 @@ export default async function NewReservationPage({
   if (endAt <= startAt) endAt = new Date(startAt.getTime() + 30 * 60 * 1000);
 
   if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime())) {
+    const rid = roomId ?? "demo-room";
     redirect(
       `/reservations/new?roomId=${encodeURIComponent(
-        roomId
+        rid
       )}&date=${encodeURIComponent(minDate)}&start=08:30&end=09:00`
     );
   }
@@ -136,30 +149,94 @@ export default async function NewReservationPage({
   const startAtISO = startAt.toISOString();
   const endAtISO = endAt.toISOString();
 
-  const room = await prisma.room.findUnique({
-    where: { id: roomId },
-    select: { id: true, name: true, floor: true, capacity: true },
-  });
-  if (!room) redirect("/search");
+  // ----------------------------
+  // ✅ 1) Demo 模式（沒 DB 也能跑）
+  // ----------------------------
+  let room: RoomLite | null = null;
+  let attendeeOptions: AttendeeOption[] = [];
+  let hasConflict = false;
 
-  const dayStart = buildDateTime(clampedDate, "00:00");
-  const dayEnd = buildDateTime(clampedDate, "23:59");
+  if (!hasDb) {
+    const demoRoomId = roomId ?? "demo-room";
+    room = {
+      id: demoRoomId,
+      name: "示範會議室",
+      floor: "3F",
+      capacity: 10,
+    };
 
-  const existing = await prisma.reservation.findMany({
-    where: {
-      roomId: room.id,
-      status: { in: [ReservationStatus.CONFIRMED, ReservationStatus.BLOCKED] },
-      startAt: { lt: dayEnd },
-      endAt: { gt: dayStart },
-    },
-    select: { startAt: true, endAt: true },
-    orderBy: { startAt: "asc" },
-  });
+    attendeeOptions = [
+      { id: "u1", name: "王小明", dept: "產品", email: "ming@example.com" },
+      { id: "u2", name: "陳小華", dept: "工程", email: "hua@example.com" },
+      { id: "u3", name: "林怡君", dept: "行政", email: "yi@example.com" },
+    ];
 
-  const hasConflict = existing.some((r) =>
-    overlaps(startAt, endAt, r.startAt, r.endAt)
-  );
-  const isBlockedNow = hasConflict || errorConflict;
+    hasConflict = false;
+  } else {
+    // ----------------------------
+    // ✅ 2) 真實模式：runtime 才載入 prisma（避免 build 階段炸）
+    // ----------------------------
+    const { prisma } = await import("@/lib/prisma");
+
+    const foundRoom = await prisma.room.findUnique({
+      where: { id: roomId! },
+      select: { id: true, name: true, floor: true, capacity: true },
+    });
+    if (!foundRoom) redirect("/search");
+
+    room = {
+      id: foundRoom.id,
+      name: foundRoom.name,
+      floor: foundRoom.floor ?? null,
+      capacity: typeof foundRoom.capacity === "number" ? foundRoom.capacity : null,
+    };
+
+    const dayStart = buildDateTime(clampedDate, "00:00");
+    const dayEnd = buildDateTime(clampedDate, "23:59");
+
+    const existing = await prisma.reservation.findMany({
+      where: {
+        roomId: room.id,
+        status: { in: [ReservationStatus.CONFIRMED, ReservationStatus.BLOCKED] },
+        startAt: { lt: dayEnd },
+        endAt: { gt: dayStart },
+      },
+      select: { startAt: true, endAt: true },
+      orderBy: { startAt: "asc" },
+    });
+
+    hasConflict = existing.some((r) => overlaps(startAt, endAt, r.startAt, r.endAt));
+
+    // ✅ 安全 fallback：employee -> user -> []
+    const p: any = prisma;
+
+    const rawPeople: {
+      id: string;
+      name: string | null;
+      dept?: string | null;
+      email?: string | null;
+    }[] = p?.employee?.findMany
+      ? await p.employee.findMany({
+          select: { id: true, name: true, dept: true, email: true },
+          orderBy: [{ dept: "asc" }, { name: "asc" }],
+        })
+      : p?.user?.findMany
+      ? await p.user.findMany({
+          select: { id: true, name: true, dept: true, email: true },
+          orderBy: [{ dept: "asc" }, { name: "asc" }],
+        })
+      : [];
+
+    attendeeOptions = rawPeople.map((e) => ({
+      id: e.id,
+      name: e.name ?? "（未命名）",
+      dept: e.dept?.trim() ? e.dept.trim() : "未分類",
+      email: e.email?.trim() ? e.email.trim() : null,
+    }));
+  }
+
+  // 這時 room 一定有值（demo / real 都會設定）
+  const isBlockedNow = (!hasDb ? false : hasConflict || errorConflict);
 
   const titlePrefix = room.floor ? `${room.floor}・` : "";
   const roomTitle = `${titlePrefix}${room.name}`;
@@ -174,41 +251,21 @@ export default async function NewReservationPage({
     start
   )}&end=${encodeURIComponent(end)}`;
 
-  // ✅ 安全 fallback：employee -> user -> []
-  const p: any = prisma;
-
-  const rawPeople: {
-    id: string;
-    name: string | null;
-    dept?: string | null;
-    email?: string | null;
-  }[] = p?.employee?.findMany
-    ? await p.employee.findMany({
-        select: { id: true, name: true, dept: true, email: true },
-        orderBy: [{ dept: "asc" }, { name: "asc" }],
-      })
-    : p?.user?.findMany
-    ? await p.user.findMany({
-        select: { id: true, name: true, dept: true, email: true },
-        orderBy: [{ dept: "asc" }, { name: "asc" }],
-      })
-    : [];
-
-  // ✅ 這裡要符合你目前 AttendeePicker 的型別：dept/email 為 string|null
-  const attendeeOptions: AttendeeOption[] = rawPeople.map((e) => ({
-    id: e.id,
-    name: e.name ?? "（未命名）",
-    dept: e.dept?.trim() ? e.dept.trim() : "未分類",
-    email: e.email?.trim() ? e.email.trim() : null,
-  }));
-
   async function action(formData: FormData) {
     "use server";
-    await createReservation(formData);
+    // ✅ Demo 模式：不碰 DB，直接回到同頁顯示提示（讓 UI 流程可展示）
+    if (!process.env.DATABASE_URL) {
+      redirect(`${currentHrefClean}&updated=1&error=demo`);
+    }
+
+    // ✅ 真實模式：runtime 才 import server action（避免 build 階段就碰 DB）
+    const mod = await import("@/app/actions/reservations");
+    await mod.createReservation(formData);
   }
 
   async function updateCriteria(formData: FormData) {
     "use server";
+
     const nextDateRaw = normalizeDateYmd(
       String(formData.get("date") ?? clampedDate),
       minDate
@@ -233,13 +290,20 @@ export default async function NewReservationPage({
     );
   }
 
-  const openEditPanel = hasConflict || errorConflict;
+  const openEditPanel = hasDb ? hasConflict || errorConflict : true;
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-8 pb-28 lg:pb-8">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">建立預約</h1>
         <p className="mt-1 text-sm text-zinc-500">確認摘要後即可完成預約。</p>
+
+        {!hasDb ? (
+          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            目前為 <span className="font-semibold">Demo 模式</span>（未設定 DATABASE_URL），
+            可用來展示 UI 與流程；送出不會寫入資料庫。
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-6 rounded-2xl border border-zinc-200 bg-white p-5">
@@ -267,11 +331,35 @@ export default async function NewReservationPage({
           </div>
         ) : null}
 
+        {errorDemo ? (
+          <div className="mb-5 flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 md:flex-row md:items-start md:justify-between">
+            <div>
+              <div className="text-sm font-semibold text-amber-900">
+                Demo 模式：已送出（未寫入資料庫）
+              </div>
+              <div className="mt-1 text-sm text-amber-800">
+                {toDisplayYMD(clampedDate)}　{start} – {end}
+              </div>
+              <div className="mt-2 text-sm text-amber-800">
+                目前僅用於展示 UI/流程；要啟用真實預約請設定 DATABASE_URL。
+              </div>
+            </div>
+
+            <Link
+              href={currentHrefClean}
+              className="self-start rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+              title="關閉提示"
+            >
+              關閉
+            </Link>
+          </div>
+        ) : null}
+
         {!errorConflict && wasUpdated ? (
           <div
             className={[
               "mb-5 flex flex-col gap-3 rounded-2xl border p-4 md:flex-row md:items-start md:justify-between",
-              hasConflict
+              hasDb && hasConflict
                 ? "border-rose-200 bg-rose-50"
                 : "border-emerald-200 bg-emerald-50",
             ].join(" ")}
@@ -280,15 +368,17 @@ export default async function NewReservationPage({
               <div
                 className={[
                   "text-sm font-semibold",
-                  hasConflict ? "text-rose-900" : "text-emerald-900",
+                  hasDb && hasConflict ? "text-rose-900" : "text-emerald-900",
                 ].join(" ")}
               >
-                {hasConflict ? "已更新條件，但此時段仍有撞期" : "已更新條件（可預約）"}
+                {hasDb && hasConflict
+                  ? "已更新條件，但此時段仍有撞期"
+                  : "已更新條件（可預約）"}
               </div>
               <div
                 className={[
                   "mt-1 text-sm",
-                  hasConflict ? "text-rose-800" : "text-emerald-800",
+                  hasDb && hasConflict ? "text-rose-800" : "text-emerald-800",
                 ].join(" ")}
               >
                 {toDisplayYMD(clampedDate)}　{start} – {end}
@@ -299,7 +389,7 @@ export default async function NewReservationPage({
               href={currentHrefClean}
               className={[
                 "self-start rounded-xl border px-3 py-2 text-xs font-semibold",
-                hasConflict
+                hasDb && hasConflict
                   ? "border-rose-200 bg-white text-rose-900 hover:bg-rose-100"
                   : "border-emerald-200 bg-white text-emerald-900 hover:bg-emerald-100",
               ].join(" ")}
@@ -476,7 +566,6 @@ export default async function NewReservationPage({
                 ) : null}
               </div>
 
-              {/* ✅ 改成符合新 AttendeePicker props */}
               <AttendeePicker
                 employees={attendeeOptions}
                 fieldName="attendeeIds"
@@ -515,21 +604,29 @@ export default async function NewReservationPage({
               >
                 <button
                   type="submit"
-                  disabled={isBlockedNow}
+                  disabled={hasDb ? isBlockedNow : false}
                   className={[
                     "h-11 w-full rounded-xl text-sm font-semibold",
                     "lg:w-auto lg:px-6",
-                    isBlockedNow
+                    hasDb && isBlockedNow
                       ? "cursor-not-allowed bg-zinc-200 text-zinc-500"
                       : "bg-black text-white hover:opacity-90",
                   ].join(" ")}
-                  title={isBlockedNow ? "此時段已被預約，請修改時間" : "確認送出預約"}
+                  title={
+                    hasDb && isBlockedNow
+                      ? "此時段已被預約，請修改時間"
+                      : "確認送出預約"
+                  }
                 >
                   確認預約
                 </button>
 
                 <div className="mt-2 text-center text-xs text-zinc-500 lg:text-left">
-                  {isBlockedNow ? "此時段已被預約，請先修改時間" : "送出後會再次檢查撞期"}
+                  {hasDb
+                    ? isBlockedNow
+                      ? "此時段已被預約，請先修改時間"
+                      : "送出後會再次檢查撞期"
+                    : "Demo 模式：送出後只顯示提示，不會寫入資料庫"}
                 </div>
               </div>
             </form>
